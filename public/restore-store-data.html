@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restore Store Data - SR Components</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f8farfd;
+            color: #1f2937;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        button {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 8px 4px;
+        }
+        button:hover { background: #2563eb; }
+        button:disabled { background: #9ca3af; cursor: not-allowed; }
+        .success { color: #059669; }
+        .error { color: #dc2626; }
+        .status { 
+            padding: 16px; 
+            margin: 16px 0; 
+            border-radius: 8px; 
+            background: #f3f4f6;
+            border-left: 4px solid #6b7280;
+        }
+        .success-status { background: #ecfdf5; border-color: #059669; }
+        .error-status { background: #fef2f2; border-color: #dc2626; }
+        ul { list-style: none; padding: 0; }
+        li { padding: 4px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛠️ Restore SR Components Store Data</h1>
+        <p>This tool will restore your workspace and add sample inventory items to get your store running again.</p>
+        
+        <div id="status" class="status">
+            � This tool requires authentication to restore your workspace data. Click "Restore Store Data" to begin.
+        </div>
+
+        <div style="margin: 20px 0;">
+            <button id="restoreBtn" onclick="restoreData()">🚀 Restore Store Data</button>
+            <button id="testBtn" onclick="testStore()" disabled>🧪 Test Store</button>
+            <button id="viewBtn" onclick="viewStore()" disabled>🏪 View Store</button>
+        </div>
+
+        <div id="progress" style="display: none;">
+            <h3>📊 Progress:</h3>
+            <ul id="progressList"></ul>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, doc, setDoc, collection, getDocs, query, where } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+        import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyDpHaMDPpqn0g3OQIO74_K3s-7R-OjzZ3M",
+            authDomain: "srclickup.firebaseapp.com",
+            projectId: "srclickup",
+            storageBucket: "srclickup.firebasestorage.app",
+            messagingSenderId: "523172513214",
+            appId: "1:523172513214:web:cb08acee79ff40d98f6fbd",
+            measurementId: "G-DG5DR5WZZR"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        const WORKSPACE_ID = "uQBVeKWfrv9eG7SWspVt";
+        const USER_ID = "6CSb6EwC4NcgbXKCwui1S47G9723";
+
+        // Add login form
+        function showLoginForm() {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = 'status';
+            statusDiv.innerHTML = `
+                <h3>🔐 Authentication Required</h3>
+                <p>Please login or create account to restore your workspace data:</p>
+                <div style="margin: 16px 0;">
+                    <input type="email" id="loginEmail" placeholder="Email" value="info@srcomponents.co.za" style="width: 100%; padding: 8px; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px;">
+                    <input type="password" id="loginPassword" placeholder="Password" style="width: 100%; padding: 8px; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+                        <button onclick="performLogin()" style="margin: 0;">🔑 Login & Restore</button>
+                        <button onclick="createAccount()" style="margin: 0; background: #10b981;">👤 Create Account</button>
+                    </div>
+                    <button onclick="resetPassword()" style="width: 100%; margin-top: 8px; background: #6b7280;">🔄 Reset Password</button>
+                    <div id="authStatus" style="margin-top: 8px; font-size: 14px;"></div>
+                </div>
+            `;
+            document.getElementById('restoreBtn').style.display = 'none';
+        }
+
+        window.performLogin = async function() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const authStatus = document.getElementById('authStatus');
+            
+            if (!email || !password) {
+                authStatus.innerHTML = '<span style="color: #dc2626;">Please enter both email and password</span>';
+                return;
+            }
+
+            const statusDiv = document.getElementById('status');
+            authStatus.innerHTML = '🔄 Logging in...';
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+                statusDiv.innerHTML = '✅ Logged in successfully! Starting restoration...';
+                setTimeout(() => performRestore(), 1000);
+            } catch (error) {
+                console.error('Login error:', error);
+                authStatus.innerHTML = `<span style="color: #dc2626;">❌ Login failed: ${error.message}</span>`;
+            }
+        };
+
+        window.createAccount = async function() {
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+            const authStatus = document.getElementById('authStatus');
+            
+            if (!email || !password) {
+                authStatus.innerHTML = '<span style="color: #dc2626;">Please enter both email and password</span>';
+                return;
+            }
+
+            if (password.length < 6) {
+                authStatus.innerHTML = '<span style="color: #dc2626;">Password must be at least 6 characters</span>';
+                return;
+            }
+
+            authStatus.innerHTML = '🔄 Creating account...';
+
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                authStatus.innerHTML = '<span style="color: #059669;">✅ Account created! Starting restoration...</span>';
+                setTimeout(() => performRestore(), 1000);
+            } catch (error) {
+                console.error('Account creation error:', error);
+                authStatus.innerHTML = `<span style="color: #dc2626;">❌ Account creation failed: ${error.message}</span>`;
+            }
+        };
+
+        window.resetPassword = async function() {
+            const email = document.getElementById('loginEmail').value;
+            const authStatus = document.getElementById('authStatus');
+            
+            if (!email) {
+                authStatus.innerHTML = '<span style="color: #dc2626;">Please enter your email address</span>';
+                return;
+            }
+
+            authStatus.innerHTML = '🔄 Sending password reset email...';
+
+            try {
+                await sendPasswordResetEmail(auth, email);
+                authStatus.innerHTML = '<span style="color: #059669;">✅ Password reset email sent! Check your inbox and try logging in again.</span>';
+            } catch (error) {
+                console.error('Password reset error:', error);
+                authStatus.innerHTML = `<span style="color: #dc2626;">❌ Password reset failed: ${error.message}</span>`;
+            }
+        };
+
+        window.restoreData = async function() {
+            const statusDiv = document.getElementById('status');
+            const progressDiv = document.getElementById('progress');
+            const progressList = document.getElementById('progressList');
+            const restoreBtn = document.getElementById('restoreBtn');
+            
+            // Check if user is authenticated
+            if (!auth.currentUser) {
+                showLoginForm();
+                return;
+            }
+
+            try {
+                restoreBtn.disabled = true;
+                progressDiv.style.display = 'block';
+                progressList.innerHTML = '';
+                statusDiv.className = 'status';
+                statusDiv.innerHTML = '🔄 Restoring data...';
+
+                function addProgress(message, success = true) {
+                    const li = document.createElement('li');
+                    li.innerHTML = `${success ? '✅' : '❌'} ${message}`;
+                    li.className = success ? 'success' : 'error';
+                    progressList.appendChild(li);
+                }
+
+                // 1. Create user workspace mapping
+                await setDoc(doc(db, 'users', USER_ID), {
+                    workspaceId: WORKSPACE_ID
+                });
+                addProgress('Created user workspace mapping');
+
+                // 2. Create workspace
+                await setDoc(doc(db, 'workspaces', WORKSPACE_ID), {
+                    id: WORKSPACE_ID,
+                    name: "SR Components",
+                    createdAt: new Date().toISOString(),
+                    createdBy: USER_ID
+                });
+                addProgress('Created workspace document');
+
+                // 3. Create workspace membership
+                await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'members', USER_ID), {
+                    role: "owner",
+                    joinedAt: new Date().toISOString(),
+                    email: "info@srcomponents.co.za"
+                });
+                addProgress('Created workspace membership');
+
+                // 4. Create categories
+                const categories = [
+                    {
+                        id: "cat_screen_repairs",
+                        name: "Screen Repairs", 
+                        description: "Complete screen assemblies and display components",
+                        sortOrder: 1,
+                        isActive: true,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    },
+                    {
+                        id: "cat_battery_replacements",
+                        name: "Battery Replacements",
+                        description: "High-quality replacement batteries",
+                        sortOrder: 2,
+                        isActive: true,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    }
+                ];
+
+                for (const category of categories) {
+                    await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'ecommerce_categories', category.id), category);
+                    addProgress(`Created category: ${category.name}`);
+                }
+
+                // 5. Create inventory items  
+                const inventoryItems = [
+                    {
+                        id: "inv_001",
+                        name: "iPhone 14 Pro Screen Assembly",
+                        description: "Complete OLED screen assembly for iPhone 14 Pro",
+                        category: "Screen Repairs",
+                        sku: "IPH14P-SCR-001",
+                        unitPrice: 299.99,
+                        currentStock: 15,
+                        minStock: 5,
+                        maxStock: 50,
+                        supplier: "TechParts Pro",
+                        location: "Shelf A1",
+                        isPublic: true,
+                        barcode: "1234567890123",
+                        barcodeFormat: "EAN13",
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    },
+                    {
+                        id: "inv_002", 
+                        name: "Samsung Galaxy S23 Ultra Battery",
+                        description: "5000mAh battery for Galaxy S23 Ultra",
+                        category: "Battery Replacements",
+                        sku: "SGS23U-BAT-001",
+                        unitPrice: 89.99,
+                        currentStock: 20,
+                        minStock: 8,
+                        maxStock: 40,
+                        supplier: "Samsung Parts Direct",
+                        location: "Shelf B2", 
+                        isPublic: true,
+                        barcode: "2345678901234",
+                        barcodeFormat: "EAN13",
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    }
+                ];
+
+                for (const item of inventoryItems) {
+                    await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'inventory', item.id), item);
+                    addProgress(`Created inventory: ${item.name}`);
+                }
+
+                // 6. Create ecommerce products
+                const products = [
+                    {
+                        id: "prod_inv_001",
+                        name: "iPhone 14 Pro Screen Assembly",
+                        description: "Complete OLED screen assembly for iPhone 14 Pro. Professional installation recommended.",
+                        shortDescription: "iPhone 14 Pro complete screen replacement",
+                        sku: "IPH14P-SCR-001",
+                        categoryIds: ["cat_screen_repairs"],
+                        images: [],
+                        variants: [{
+                            id: "var_inv_001",
+                            sku: "IPH14P-SCR-001", 
+                            name: "iPhone 14 Pro Screen Assembly",
+                            price: 299.99,
+                            stockQuantity: 15,
+                            lowStockThreshold: 5,
+                            isActive: true,
+                            attributes: [{name: "Supplier", value: "TechParts Pro"}]
+                        }],
+                        isActive: true,
+                        isFeatured: true,
+                        brand: "TechParts Pro",
+                        tags: ["Screen Repairs", "repair-part", "inventory-sync", "iPhone", "Premium"],
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        createdBy: "inventory-sync"
+                    },
+                    {
+                        id: "prod_inv_002",
+                        name: "Samsung Galaxy S23 Ultra Battery",
+                        description: "Original 5000mAh battery for Galaxy S23 Ultra with warranty.",
+                        shortDescription: "Galaxy S23 Ultra 5000mAh battery kit",
+                        sku: "SGS23U-BAT-001",
+                        categoryIds: ["cat_battery_replacements"],
+                        images: [],
+                        variants: [{
+                            id: "var_inv_002",
+                            sku: "SGS23U-BAT-001",
+                            name: "Samsung Galaxy S23 Ultra Battery",
+                            price: 89.99, 
+                            stockQuantity: 20,
+                            lowStockThreshold: 8,
+                            isActive: true,
+                            attributes: [{name: "Supplier", value: "Samsung Parts Direct"}]
+                        }],
+                        isActive: true,
+                        isFeatured: true,
+                        brand: "Samsung Parts Direct",
+                        tags: ["Battery Replacements", "repair-part", "inventory-sync", "Samsung", "Ultra"],
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        createdBy: "inventory-sync"
+                    }
+                ];
+
+                for (const product of products) {
+                    await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'ecommerce_products', product.id), product);
+                    addProgress(`Created product: ${product.name}`);
+                }
+
+            } catch (error) {
+                console.error('Restore error:', error);
+                statusDiv.className = 'status error-status';
+                statusDiv.innerHTML = `❌ <strong>Error restoring data:</strong> ${error.message}`;
+                restoreBtn.disabled = false;
+            }
+        };
+
+        // Initial restore function that checks auth first
+        window.restoreData = function() {
+            if (!auth.currentUser) {
+                showLoginForm();
+                return;
+            }
+            performRestore();
+        };
+
+        // The actual restore logic moved to separate function
+        async function performRestore() {
+            const statusDiv = document.getElementById('status');
+            const progressDiv = document.getElementById('progress');
+            const progressList = document.getElementById('progressList');
+            const restoreBtn = document.getElementById('restoreBtn');
+            
+            try {
+                restoreBtn.disabled = true;
+                progressDiv.style.display = 'block';
+                progressList.innerHTML = '';
+                statusDiv.className = 'status';
+                statusDiv.innerHTML = '🔄 Restoring data...';
+
+                function addProgress(message, success = true) {
+                    const li = document.createElement('li');
+                    li.innerHTML = `${success ? '✅' : '❌'} ${message}`;
+                    li.className = success ? 'success' : 'error';
+                    progressList.appendChild(li);
+                }
+
+                // Continue with existing restoration logic...
+                await setDoc(doc(db, 'users', USER_ID), {
+                    workspaceId: WORKSPACE_ID
+                });
+                addProgress('Created user workspace mapping');
+
+                await setDoc(doc(db, 'workspaces', WORKSPACE_ID), {
+                    id: WORKSPACE_ID,
+                    name: "SR Components",
+                    createdAt: new Date().toISOString(),
+                    createdBy: USER_ID
+                });
+                addProgress('Created workspace document');
+
+                await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'members', USER_ID), {
+                    role: "owner",
+                    joinedAt: new Date().toISOString(),
+                    email: "info@srcomponents.co.za"
+                });
+                addProgress('Created workspace membership');
+
+                // 4. Create categories
+                const categories = [
+                    {
+                        id: "cat_screen_repairs",
+                        name: "Screen Repairs", 
+                        description: "Complete screen assemblies and display components",
+                        sortOrder: 1,
+                        isActive: true,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    },
+                    {
+                        id: "cat_battery_replacements",
+                        name: "Battery Replacements",
+                        description: "High-quality replacement batteries",
+                        sortOrder: 2,
+                        isActive: true,
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    }
+                ];
+
+                for (const category of categories) {
+                    await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'ecommerce_categories', category.id), category);
+                    addProgress(`Created category: ${category.name}`);
+                }
+
+                // 5. Create inventory items  
+                const inventoryItems = [
+                    {
+                        id: "inv_001",
+                        name: "iPhone 14 Pro Screen Assembly",
+                        description: "Complete OLED screen assembly for iPhone 14 Pro",
+                        category: "Screen Repairs",
+                        sku: "IPH14P-SCR-001",
+                        unitPrice: 299.99,
+                        currentStock: 15,
+                        minStock: 5,
+                        maxStock: 50,
+                        supplier: "TechParts Pro",
+                        location: "Shelf A1",
+                        isPublic: true,
+                        barcode: "1234567890123",
+                        barcodeFormat: "EAN13",
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    },
+                    {
+                        id: "inv_002", 
+                        name: "Samsung Galaxy S23 Ultra Battery",
+                        description: "5000mAh battery for Galaxy S23 Ultra",
+                        category: "Battery Replacements",
+                        sku: "SGS23U-BAT-001",
+                        unitPrice: 89.99,
+                        currentStock: 20,
+                        minStock: 8,
+                        maxStock: 40,
+                        supplier: "Samsung Parts Direct",
+                        location: "Shelf B2", 
+                        isPublic: true,
+                        barcode: "2345678901234",
+                        barcodeFormat: "EAN13",
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString()
+                    }
+                ];
+
+                for (const item of inventoryItems) {
+                    await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'inventory', item.id), item);
+                    addProgress(`Created inventory: ${item.name}`);
+                }
+
+                // 6. Create ecommerce products
+                const products = [
+                    {
+                        id: "prod_inv_001",
+                        name: "iPhone 14 Pro Screen Assembly",
+                        description: "Complete OLED screen assembly for iPhone 14 Pro. Professional installation recommended.",
+                        shortDescription: "iPhone 14 Pro complete screen replacement",
+                        sku: "IPH14P-SCR-001",
+                        categoryIds: ["cat_screen_repairs"],
+                        images: [],
+                        variants: [{
+                            id: "var_inv_001",
+                            sku: "IPH14P-SCR-001", 
+                            name: "iPhone 14 Pro Screen Assembly",
+                            price: 299.99,
+                            stockQuantity: 15,
+                            lowStockThreshold: 5,
+                            isActive: true,
+                            attributes: [{name: "Supplier", value: "TechParts Pro"}]
+                        }],
+                        isActive: true,
+                        isFeatured: true,
+                        brand: "TechParts Pro",
+                        tags: ["Screen Repairs", "repair-part", "inventory-sync", "iPhone", "Premium"],
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        createdBy: "inventory-sync"
+                    },
+                    {
+                        id: "prod_inv_002",
+                        name: "Samsung Galaxy S23 Ultra Battery",
+                        description: "Original 5000mAh battery for Galaxy S23 Ultra with warranty.",
+                        shortDescription: "Galaxy S23 Ultra 5000mAh battery kit",
+                        sku: "SGS23U-BAT-001",
+                        categoryIds: ["cat_battery_replacements"],
+                        images: [],
+                        variants: [{
+                            id: "var_inv_002",
+                            sku: "SGS23U-BAT-001",
+                            name: "Samsung Galaxy S23 Ultra Battery",
+                            price: 89.99, 
+                            stockQuantity: 20,
+                            lowStockThreshold: 8,
+                            isActive: true,
+                            attributes: [{name: "Supplier", value: "Samsung Parts Direct"}]
+                        }],
+                        isActive: true,
+                        isFeatured: true,
+                        brand: "Samsung Parts Direct",
+                        tags: ["Battery Replacements", "repair-part", "inventory-sync", "Samsung", "Ultra"],
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        createdBy: "inventory-sync"
+                    }
+                ];
+
+                for (const product of products) {
+                    await setDoc(doc(db, 'workspaces', WORKSPACE_ID, 'ecommerce_products', product.id), product);
+                    addProgress(`Created product: ${product.name}`);
+                }
+
+                statusDiv.className = 'status success-status';
+                statusDiv.innerHTML = '🎉 <strong>Data restored successfully!</strong> Your store now has 2 products and 2 categories.';
+                
+                document.getElementById('testBtn').disabled = false;
+                document.getElementById('viewBtn').disabled = false;
+
+            } catch (error) {
+                console.error('Restore error:', error);
+                statusDiv.className = 'status error-status';
+                statusDiv.innerHTML = `❌ <strong>Error restoring data:</strong> ${error.message}`;
+                restoreBtn.disabled = false;
+            }
+        }
+
+        window.testStore = async function() {
+            try {
+                const productsQuery = query(
+                    collection(db, 'workspaces', WORKSPACE_ID, 'ecommerce_products'),
+                    where('isActive', '==', true)
+                );
+                const productsSnapshot = await getDocs(productsQuery);
+                const activeProducts = productsSnapshot.docs.length;
+
+                const categoriesQuery = query(
+                    collection(db, 'workspaces', WORKSPACE_ID, 'ecommerce_categories'),
+                    where('isActive', '==', true)
+                );
+                const categoriesSnapshot = await getDocs(categoriesQuery);
+                const activeCategories = categoriesSnapshot.docs.length;
+
+                alert(`✅ Store Test Results:\n\n📦 Active Products: ${activeProducts}\n🏷️ Active Categories: ${activeCategories}\n\n${activeProducts > 0 ? '🎉 Your store should now display products!' : '⚠️ No active products found'}`);
+            } catch (error) {
+                alert(`❌ Test failed: ${error.message}`);
+            }
+        };
+
+        window.viewStore = function() {
+            window.open('https://srclickup.web.app', '_blank');
+        };
+    </script>
+</body>
+</html>

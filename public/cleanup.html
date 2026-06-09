@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emergency Cleanup – SRClickup</title>
+<style>
+  body { font-family: sans-serif; max-width: 600px; margin: 60px auto; padding: 0 20px; }
+  button { padding: 10px 24px; font-size: 16px; cursor: pointer; background: #dc2626; color: white; border: none; border-radius: 6px; margin-top: 12px; }
+  button:disabled { background: #9ca3af; cursor: not-allowed; }
+  #log { background: #f3f4f6; border-radius: 8px; padding: 16px; margin-top: 20px; font-family: monospace; font-size: 13px; white-space: pre-wrap; max-height: 400px; overflow-y: auto; }
+  input { padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; width: 100%; box-sizing: border-box; margin-top: 6px; }
+  label { font-size: 14px; font-weight: 600; color: #374151; display: block; margin-top: 12px; }
+</style>
+</head>
+<body>
+<h2>🔧 Emergency Task Cleanup</h2>
+<p>This will remove duplicate tasks from your workspace. Log in with your admin account.</p>
+
+<label>Email</label>
+<input type="email" id="email" value="info@simplewebhost.co.za" />
+<label>Password</label>
+<input type="password" id="password" placeholder="Your password" />
+
+<br>
+<button id="btn" onclick="run()">Run Cleanup</button>
+
+<div id="log">Waiting…</div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+import { getFirestore, collection, getDocs, doc, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyBH4CHarPiJSDTc2fNq0Y-QfKTj-JHVuEI",
+  authDomain: "srclickup.firebaseapp.com",
+  projectId: "srclickup",
+  storageBucket: "srclickup.firebasestorage.app",
+  messagingSenderId: "630877217000",
+  appId: "1:630877217000:web:b7861dcb57f9d8dbf6e95d",
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+const logEl = document.getElementById("log");
+const btn = document.getElementById("btn");
+
+function log(msg) {
+  logEl.textContent += "\n" + msg;
+  logEl.scrollTop = logEl.scrollHeight;
+  console.log(msg);
+}
+
+window.run = async function() {
+  btn.disabled = true;
+  logEl.textContent = "Starting…";
+
+  const email = document.getElementById("email").value;
+  const password = document.getElementById("password").value;
+
+  try {
+    log("🔐 Signing in…");
+    await signInWithEmailAndPassword(auth, email, password);
+    log("✅ Signed in.");
+
+    // ── 1. Delete all leftover formSubmissions ────────────────────────
+    log("\n📦 Checking formSubmissions…");
+    const subSnap = await getDocs(collection(db, "formSubmissions"));
+    log(`   Found ${subSnap.size} submission(s).`);
+    if (subSnap.size > 0) {
+      const batch = writeBatch(db);
+      subSnap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      log(`   ✅ Deleted ${subSnap.size} leftover submission(s).`);
+    }
+
+    // ── 2. Deduplicate tasks in each workspace ────────────────────────
+    log("\n📋 Loading workspaces…");
+    const wsSnap = await getDocs(collection(db, "workspaces"));
+    log(`   Found ${wsSnap.size} workspace(s).`);
+
+    for (const wsDoc of wsSnap.docs) {
+      const ws = wsDoc.data();
+      const tasks = ws.tasks || [];
+      log(`\n   Workspace: ${wsDoc.id}  —  ${tasks.length} tasks`);
+
+      if (tasks.length < 2) { log("   Nothing to clean."); continue; }
+
+      const seen = new Map();
+      const deduped = [];
+      let removed = 0;
+
+      for (const task of tasks) {
+        const key = task.jobNumber
+          ? `job:${task.jobNumber}`
+          : `t:${task.title}|l:${task.listId}|d:${task.createdAt}`;
+        if (!seen.has(key)) { seen.set(key, true); deduped.push(task); }
+        else removed++;
+      }
+
+      log(`   Keeping ${deduped.length} unique, removing ${removed} duplicates.`);
+
+      if (removed > 0) {
+        let maxJob = ws.jobCounter || 0;
+        deduped.forEach(t => {
+          if (t.jobNumber) {
+            const n = parseInt(t.jobNumber.replace(/\D/g, ""), 10);
+            if (!isNaN(n) && n > maxJob) maxJob = n;
+          }
+        });
+        await updateDoc(doc(db, "workspaces", wsDoc.id), {
+          tasks: deduped,
+          jobCounter: maxJob,
+        });
+        log(`   ✅ Saved. jobCounter = ${maxJob}`);
+      } else {
+        log("   No duplicates found.");
+      }
+    }
+
+    log("\n\n✅✅ ALL DONE. You can close this tab and reload the app.");
+    btn.textContent = "Done!";
+
+  } catch (err) {
+    log("\n❌ Error: " + err.message);
+    btn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>

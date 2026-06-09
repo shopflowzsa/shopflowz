@@ -1,0 +1,2063 @@
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { supabase } from "@/lib/supabase";
+import { Plus, Archive, Trash2, CheckSquare, X, ChevronDown, MoveRight, CreditCard } from "lucide-react";
+import { SidebarProvider } from "@/components/ui/sidebar";
+
+import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { CrmSidebar } from "@/components/crm/CrmSidebar";
+import { CrmHeader } from "@/components/crm/CrmHeader";
+import { TaskBoardView } from "@/components/crm/TaskBoardView";
+import { TaskListView } from "@/components/crm/TaskListView";
+import { TaskDetailPanel, warmInventoryCache } from "@/components/crm/TaskDetailPanel";
+import { CreateSpaceDialog, CreateFolderDialog, CreateListDialog, CreateTaskDialog } from "@/components/crm/CreateDialogs";
+import { CustomFieldsManager } from "@/components/crm/CustomFieldsManager";
+import { FormBuilder } from "@/components/crm/FormBuilder";
+import { FormListPanel } from "@/components/crm/FormListPanel";
+import { WhatsAppSettingsDialog } from "@/components/crm/WhatsAppSettingsDialog";
+import { WhatsAppLogsDialog } from "@/components/crm/WhatsAppLogsDialog";
+import { PrinterSettingsDialog } from "@/components/crm/PrinterSettingsDialog";
+import { UserManagement } from "@/components/crm/UserManagement";
+import { WorkspaceManagement } from "@/components/crm/WorkspaceManagement";
+import { EmailSettingsDialog } from "@/components/crm/EmailSettingsDialog";
+import { EcommerceSettingsDialog } from "@/components/crm/EcommerceSettingsDialog";
+import { IkhokhaJobSettingsDialog } from "@/components/crm/IkhokhaJobSettingsDialog";
+import { JobSettingsDialog } from "@/components/crm/JobSettingsDialog";
+import { SalesSettingsDialog } from "@/components/crm/SalesSettingsDialog";
+import { loadSalesSettings } from "@/lib/salesSettingsService";
+import { FieldMapperDialog } from "@/components/crm/FieldMapperDialog";
+import { loadFieldMapping, FieldMapping, DEFAULT_FIELD_MAPPING } from "@/lib/fieldMapperService";
+import { StatusManager } from "@/components/crm/StatusManager";
+import { StatusSelectionDialog } from "@/components/crm/StatusSelectionDialog";
+import { PermissionManager } from "@/components/crm/PermissionManager";
+import { ActivityMonitor } from "@/components/crm/ActivityMonitor";
+import { TaskRecoveryPanel } from "@/components/crm/TaskRecoveryPanel";
+import { GlobalSearchModal } from "@/components/crm/GlobalSearchModal";
+import { QuotationCreationPage } from "@/pages/QuotationCreationPage";
+import { AccountsPage } from "@/pages/Accounts";
+import { InventoryPage } from "@/pages/InventoryPage";
+import StockMovementsPage from "@/pages/StockMovementsPage";
+import { QuotationManagementPage } from "@/pages/QuotationManagementPage";
+import { InvoiceManagementPage } from "@/pages/InvoiceManagementPage";
+import { InvoiceCreationPage } from "@/pages/InvoiceCreationPage";
+import { CustomerPage } from "@/pages/CustomerPage";
+import { StatementPage } from "@/pages/StatementPage";
+import { BusinessOverviewPage } from "@/pages/BusinessOverviewPage";
+import { TechAssessmentPage } from "@/pages/TechAssessmentPage";
+import { OutstandingRepairsPage } from "@/pages/OutstandingRepairsPage";
+import { TaskCreationListPage } from "@/pages/TaskCreationListPage";
+import { FaultReportDialog } from "@/components/crm/FaultReportDialog";
+import { ChangePasswordDialog } from "@/components/crm/ChangePasswordDialog";
+import { SalesOverviewPage } from "@/pages/SalesOverviewPage";
+import { InventoryOverviewPage } from "@/pages/InventoryOverviewPage";
+import { InvoiceRegisterPage } from "@/pages/InvoiceRegisterPage";
+import { InventoryRegisterPage } from "@/pages/InventoryRegisterPage";
+import { BankingMatchingPage } from "@/pages/BankingMatchingPage";
+import { SpaceOverview } from "@/components/crm/SpaceOverview";
+import { FolderOverview } from "@/components/crm/FolderOverview";
+import { useAuth } from "@/contexts/AuthContext";
+import { useIsMobile } from "@/hooks/use-mobile";
+import { loadWorkspaceState, saveWorkspaceState, subscribeWorkspaceState, subscribeFormSubmissions, getPendingFormSubmissions, deleteFormSubmission, publishForm, unpublishForm, claimJobNumberAndAddTask, FormSubmission } from "@/lib/workspaceService";
+import { loadWhatsAppSettings, sendTaskWhatsApp, sendInvoiceWhatsApp } from "@/lib/whatsappService";
+import { createJobDepositPaylink } from "@/lib/ikhokhaJobService";
+import { logNewTask } from "@/lib/jobLogService";
+import { loadPrinterSettings, printBookingSlip } from "@/lib/printerService";
+import { logTaskCreated, logTaskUpdated, logTaskDeleted, logTasksBulkDeleted } from "@/lib/auditService";
+import { getQuotation } from "@/lib/quotationService";
+import { Quotation } from "@/types/invoice";
+import { createInvoice } from "@/lib/invoiceService";
+import { getCachedWorkspace, setCachedWorkspace, getMemCachedWorkspace, setMemCachedWorkspace } from "@/lib/cacheService";
+import { maybeTakeDailySnapshot } from "@/lib/snapshotService";
+import { useAppNav, NavState } from "@/hooks/useAppNav";
+import { WorkspaceState, Task, TaskComment, ViewMode, TaskStatus, TaskPriority, CustomFieldDefinition, FormDefinition, DEFAULT_STATUSES, PRIORITIES, JOBS_WITH_ISSUES_SPACE_ID } from "@/types/crm";
+
+// Empty workspace state (no sample data to prevent flash of wrong content)
+const EMPTY_WORKSPACE: WorkspaceState = {
+  customFields: [],
+  spaces: [],
+  folders: [],
+  lists: [],
+  tasks: [],
+  forms: [],
+};
+
+// Special space for tasks without photos
+import { Loader2 } from "lucide-react";
+
+export default function Index() {
+  const { user, workspaceId, loading, myRole } = useAuth();
+  const [isImpersonated, setIsImpersonated] = useState(() => sessionStorage.getItem('impersonated') === '1');
+  const [companyName, setCompanyName] = useState("");
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    loadSalesSettings(workspaceId).then(s => { if (s.companyName) setCompanyName(s.companyName); });
+    loadFieldMapping(workspaceId).then(m => setFieldMapping(m));
+  }, [workspaceId]);
+  const isMobile = useIsMobile();
+  
+  const [workspace, setWorkspace] = useState<WorkspaceState>(EMPTY_WORKSPACE);
+  const workspaceRef = useRef<WorkspaceState>(EMPTY_WORKSPACE);
+  // Debounce saves so rapid actions (status change, drag, typing) batch into one Firestore write
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Tracks writes we initiated so we can ignore the echoed Firestore snapshot
+  const selfWriteRef = useRef(false);
+  // Fingerprint of the last state we set — skip snapshot if nothing changed
+  const stateVersionRef = useRef("");
+  // Track if we've already loaded workspace for this workspaceId to prevent double-loads
+  const loadedWorkspaceIdRef = useRef<string | null>(null);
+  const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [selectedListId, setSelectedListId] = useState<string | null>("l1");
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>("board");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchIncludeArchived, setSearchIncludeArchived] = useState(false);
+  const [showFormsPanel, setShowFormsPanel] = useState(false);
+  const [showFormBuilder, setShowFormBuilder] = useState(false);
+  const [editingForm, setEditingForm] = useState<FormDefinition | null>(null);
+  const [showWhatsApp, setShowWhatsApp] = useState(false);
+  const [showPrinter, setShowPrinter] = useState(false);
+  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showWorkspaceManagement, setShowWorkspaceManagement] = useState(false);
+  const [showEmailSettings, setShowEmailSettings] = useState(false);
+  const [showEcommerceSettings, setShowEcommerceSettings] = useState(false);
+  const [showIkhokhaJobSettings, setShowIkhokhaJobSettings] = useState(false);
+  const [showJobSettings, setShowJobSettings] = useState(false);
+  const [pendingPaylink, setPendingPaylink] = useState<{ paylinkUrl: string; jobNumber: string; amountRands: number } | null>(null);
+  const [showStatusManager, setShowStatusManager] = useState<string | null>(null);
+  const [showPermissionManager, setShowPermissionManager] = useState<{ id: string; type: "space" | "folder" | "list" } | null>(null);
+  const [showStatusSelection, setShowStatusSelection] = useState(false);
+  const [statusSelectionData, setStatusSelectionData] = useState<{
+    task: Task | null;
+    targetListId: string;
+    targetListName: string;
+    availableStatuses: any[];
+  } | null>(null);
+  const [showAccountsPage, setShowAccountsPage] = useState(false);
+  const [showInventory, setShowInventory] = useState(false);
+  const [showStockMovements, setShowStockMovements] = useState(false);
+  const [showQuotations, setShowQuotations] = useState(false);
+  const [showInvoicing, setShowInvoicing] = useState(false);
+  const [initialInvoiceId, setInitialInvoiceId] = useState<string | undefined>();
+  const [initialQuotationId, setInitialQuotationId] = useState<string | undefined>();
+  const [showCustomers, setShowCustomers] = useState(false);
+  const [showStatements, setShowStatements] = useState(false);
+  const [showBusinessOverview, setShowBusinessOverview] = useState(false);
+  const [showTechAssessment, setShowTechAssessment] = useState(false);
+  const [showOutstandingRepairs, setShowOutstandingRepairs] = useState(false);
+  const [showTaskCreationList, setShowTaskCreationList] = useState(false);
+  const [showSalesOverview, setShowSalesOverview] = useState(false);
+  const [showInventoryOverview, setShowInventoryOverview] = useState(false);
+  const [showInvoiceRegister, setShowInvoiceRegister] = useState(false);
+  const [showInventoryRegister, setShowInventoryRegister] = useState(false);
+  const [showBanking, setShowBanking] = useState(false);
+  const [showSpaceOverview, setShowSpaceOverview] = useState<string | null>(null);
+  const [showFolderOverview, setShowFolderOverview] = useState<string | null>(null);
+  const [showSalesSettings, setShowSalesSettings] = useState(false);
+  const [showFieldMapper, setShowFieldMapper] = useState(false);
+  const [fieldMapping, setFieldMapping] = useState<FieldMapping>(DEFAULT_FIELD_MAPPING);
+  const [showActivityMonitor, setShowActivityMonitor] = useState(false);
+  const [showWhatsAppLogs, setShowWhatsAppLogs] = useState(false);
+  const [showTaskRecovery, setShowTaskRecovery] = useState(false);
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showQuoteDialog, setShowQuoteDialog] = useState(false);
+  const [quoteTask, setQuoteTask] = useState<Task | null>(null);
+  const [editingQuotationForTask, setEditingQuotationForTask] = useState<Quotation | null>(null);
+  const [showInvoiceFromTask, setShowInvoiceFromTask] = useState(false);
+  const [invoiceTask, setInvoiceTask] = useState<Task | null>(null);
+  const [showFaultReport, setShowFaultReport] = useState(false);
+  const [faultReportTask, setFaultReportTask] = useState<Task | null>(null);
+  const [panelWidth, setPanelWidth] = useState(() => Math.floor(window.innerWidth * 0.72));
+
+  // Multi-select / bulk actions
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
+  // Clear selection when switching lists
+  useEffect(() => { setSelectedTaskIds(new Set()); }, [selectedListId]);
+
+  // Keep selectedTask in sync with latest workspace data (real-time subscription updates workspace.tasks
+  // but selectedTask is a separate ref — without this, custom field values appear "stuck" after updates)
+  useEffect(() => {
+    if (!selectedTask) return;
+    const latest = workspace.tasks.find(t => t.id === selectedTask.id);
+    if (latest && latest !== selectedTask) setSelectedTask(latest);
+  }, [workspace.tasks]);
+
+  // Close every full-screen overlay page — call this before navigating anywhere else
+  // ── In-app navigation helpers ─────────────────────────────────────────────
+
+  const captureNav = useCallback((): NavState => {
+    const overlay =
+      showTaskCreationList ? "taskCreationList"
+      : showInvoiceRegister ? "invoiceRegister"
+      : showInventoryRegister ? "inventoryRegister"
+      : showInvoicing ? "invoicing"
+      : showQuotations ? "quotations"
+      : showCustomers ? "customers"
+      : showStatements ? "statements"
+      : showBusinessOverview ? "businessOverview"
+      : showSalesOverview ? "salesOverview"
+      : showInventoryOverview ? "inventoryOverview"
+      : showTechAssessment ? "techAssessment"
+      : showOutstandingRepairs ? "outstandingRepairs"
+      : showInventory ? "inventory"
+      : showStockMovements ? "stockMovements"
+      : showBanking ? "banking"
+      : showAccountsPage ? "accountsPage"
+      : showSpaceOverview ? "spaceOverview"
+      : showFolderOverview ? "folderOverview"
+      : showFormsPanel ? "forms"
+      : null;
+    return {
+      listId: selectedListId,
+      taskId: selectedTask?.id ?? null,
+      overlay,
+      extra: showSpaceOverview ?? showFolderOverview ?? undefined,
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTaskCreationList, showInvoiceRegister, showInventoryRegister, showInvoicing, showQuotations,
+      showCustomers, showStatements, showBusinessOverview, showSalesOverview, showInventoryOverview,
+      showTechAssessment, showOutstandingRepairs, showInventory, showStockMovements, showBanking, showAccountsPage,
+      showSpaceOverview, showFolderOverview, showFormsPanel, selectedListId, selectedTask?.id]);
+
+  const restoreNav = useCallback((snap: NavState) => {
+    // Close everything, then restore
+    setShowInventory(false); setShowStockMovements(false); setShowQuotations(false);
+    setShowInvoicing(false); setShowCustomers(false); setShowStatements(false);
+    setShowBusinessOverview(false); setShowTechAssessment(false); setShowOutstandingRepairs(false);
+    setShowTaskCreationList(false); setShowSalesOverview(false); setShowInventoryOverview(false);
+    setShowInvoiceRegister(false); setShowInventoryRegister(false); setShowInvoiceFromTask(false); setShowBanking(false);
+    setShowAccountsPage(false); setShowSpaceOverview(null); setShowFolderOverview(null); setShowFormsPanel(false);
+    setSelectedTask(null);
+    if (snap.listId) setSelectedListId(snap.listId);
+    if (snap.overlay === "taskCreationList")   setShowTaskCreationList(true);
+    else if (snap.overlay === "invoiceRegister")   setShowInvoiceRegister(true);
+    else if (snap.overlay === "inventoryRegister") setShowInventoryRegister(true);
+    else if (snap.overlay === "invoicing")         setShowInvoicing(true);
+    else if (snap.overlay === "quotations")        setShowQuotations(true);
+    else if (snap.overlay === "customers")         setShowCustomers(true);
+    else if (snap.overlay === "statements")        setShowStatements(true);
+    else if (snap.overlay === "businessOverview")  setShowBusinessOverview(true);
+    else if (snap.overlay === "salesOverview")     setShowSalesOverview(true);
+    else if (snap.overlay === "inventoryOverview") setShowInventoryOverview(true);
+    else if (snap.overlay === "techAssessment")    setShowTechAssessment(true);
+    else if (snap.overlay === "outstandingRepairs") setShowOutstandingRepairs(true);
+    else if (snap.overlay === "inventory")         setShowInventory(true);
+    else if (snap.overlay === "stockMovements")    setShowStockMovements(true);
+    else if (snap.overlay === "banking")           setShowBanking(true);
+    else if (snap.overlay === "accountsPage")      setShowAccountsPage(true);
+    else if (snap.overlay === "spaceOverview" && snap.extra) setShowSpaceOverview(snap.extra);
+    else if (snap.overlay === "folderOverview" && snap.extra) setShowFolderOverview(snap.extra);
+    else if (snap.overlay === "forms")             setShowFormsPanel(true);
+    if (snap.taskId) {
+      const t = workspaceRef.current.tasks.find(tk => tk.id === snap.taskId);
+      if (t) setTimeout(() => setSelectedTask(t), 50);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const { push: navPush, replace: navReplace, back: navBack, forward: navForward,
+          canGoBack, canGoForward, restoreOnMount } = useAppNav(restoreNav);
+
+  // Auto-push to nav history whenever the view changes
+  const navInitRef = useRef(false);
+  const prevNavKeyRef = useRef("");
+  useEffect(() => {
+    if (!navInitRef.current) { navInitRef.current = true; return; }
+    const snap = captureNav();
+    const key = JSON.stringify(snap);
+    if (key === prevNavKeyRef.current) return;
+    prevNavKeyRef.current = key;
+    navPush(snap);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showTaskCreationList, showInvoiceRegister, showInventoryRegister, showInvoicing, showQuotations,
+      showCustomers, showStatements, showBusinessOverview, showSalesOverview, showInventoryOverview,
+      showTechAssessment, showOutstandingRepairs, showInventory, showStockMovements, showBanking, showAccountsPage,
+      showSpaceOverview, showFolderOverview, showFormsPanel, selectedListId, selectedTask?.id]);
+
+  // Refresh workspace data without reloading the page
+  const handleRefresh = useCallback(async () => {
+    if (!workspaceId || isRefreshing) return;
+    setIsRefreshing(true);
+    try {
+      const fresh = await loadWorkspaceState(workspaceId);
+      setWorkspace(fresh);
+      workspaceRef.current = fresh;
+    } catch (e) {
+      console.error("Refresh failed", e);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [workspaceId, isRefreshing]);
+
+  const closeAllOverlays = () => {
+    setShowInventory(false);
+    setShowStockMovements(false);
+    setShowQuotations(false);
+    setShowInvoicing(false);
+    setShowCustomers(false);
+    setShowStatements(false);
+    setShowBusinessOverview(false);
+    setShowTechAssessment(false);
+    setShowOutstandingRepairs(false);
+    setShowTaskCreationList(false);
+    setShowSalesOverview(false);
+    setShowInventoryOverview(false);
+    setShowInvoiceRegister(false);
+    setShowInventoryRegister(false);
+    setShowBanking(false);
+    setShowInvoiceFromTask(false);
+    // Always close the task detail panel when leaving CRM context
+    setSelectedTask(null);
+  };
+
+  // True whenever a full-screen overlay page is active — used to hide the CRM task panel
+  const anyOverlayActive = showInventory || showStockMovements || showQuotations || showInvoicing ||
+    showCustomers || showStatements || showBusinessOverview || showTechAssessment ||
+    showOutstandingRepairs || showTaskCreationList || showSalesOverview || showInventoryOverview ||
+    showInvoiceRegister || showInventoryRegister || showBanking;
+
+  // Track whether a task card is being HTML5-dragged (to show drop zones)
+  const [isDraggingTask, setIsDraggingTask] = useState(false);
+  useEffect(() => {
+    const onStart = () => setIsDraggingTask(true);
+    const onEnd = () => setIsDraggingTask(false);
+    document.addEventListener('dragstart', onStart);
+    document.addEventListener('dragend', onEnd);
+    document.addEventListener('drop', onEnd);
+    return () => {
+      document.removeEventListener('dragstart', onStart);
+      document.removeEventListener('dragend', onEnd);
+      document.removeEventListener('drop', onEnd);
+    };
+  }, []);
+
+  // Drop handler: open any dragged task in the detail panel
+  const handleDropToOpenTask = (e: React.DragEvent) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData('text/plain');
+    if (!taskId) return;
+    const task = workspaceRef.current.tasks.find(t => t.id === taskId);
+    if (task) handleOpenTask(task);
+    setIsDraggingTask(false);
+  };
+  const isResizing = useRef(false);
+  const startX = useRef(0);
+  const startWidth = useRef(0);
+
+  // Sidebar (left) resize
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('crm_sidebar_width');
+    return saved ? parseInt(saved, 10) : 256;
+  });
+  const isSidebarResizing = useRef(false);
+  const sidebarStartX = useRef(0);
+  const sidebarStartWidth = useRef(0);
+
+  const onSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    isSidebarResizing.current = true;
+    sidebarStartX.current = e.clientX;
+    sidebarStartWidth.current = sidebarWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev: MouseEvent) => {
+      if (!isSidebarResizing.current) return;
+      const delta = ev.clientX - sidebarStartX.current;
+      const newW = Math.min(480, Math.max(180, sidebarStartWidth.current + delta));
+      setSidebarWidth(newW);
+      localStorage.setItem('crm_sidebar_width', String(newW));
+    };
+    const onUp = () => {
+      isSidebarResizing.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [sidebarWidth]);
+
+  const onResizeStart = useCallback((e: React.MouseEvent) => {
+    isResizing.current = true;
+    startX.current = e.clientX;
+    startWidth.current = panelWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: MouseEvent) => {
+      if (!isResizing.current) return;
+      const delta = startX.current - ev.clientX;
+      const newWidth = Math.min(Math.floor(window.innerWidth * 0.9), Math.max(320, startWidth.current + delta));
+      setPanelWidth(newWidth);
+    };
+    const onUp = () => {
+      isResizing.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [panelWidth]);
+
+  const [showCreateSpace, setShowCreateSpace] = useState(false);
+  const [createFolderSpaceId, setCreateFolderSpaceId] = useState<string | null>(null);
+  const [createListParent, setCreateListParent] = useState<{ id: string; type: "folder" | "space" } | null>(null);
+  const [createTaskStatus, setCreateTaskStatus] = useState<TaskStatus | undefined>();
+  const [showCreateTask, setShowCreateTask] = useState(false);
+
+  // Load and subscribe to workspace data from Firebase
+  useEffect(() => {
+    console.log('[Workspace Load] Effect triggered. workspaceId:', workspaceId, 'loadedWorkspaceId:', loadedWorkspaceIdRef.current);
+    
+    if (!workspaceId) {
+      setIsLoadingWorkspace(false);
+      return;
+    }
+
+    // Guard: prevent re-loading if we've already loaded this workspace AND have data
+    if (loadedWorkspaceIdRef.current === workspaceId && workspace.tasks.length > 0) {
+      console.log('[Workspace Load] Already loaded this workspace with', workspace.tasks.length, 'tasks, skipping...');
+      return;
+    }
+
+    console.log('[Workspace Load] Will load workspace...');
+    let unsubscribe: (() => void) | undefined;
+
+    const loadAndSubscribe = async () => {
+      console.log('[Workspace Load] Starting loadAndSubscribe...');
+      try {
+        // ⚡ 1. Serve in-memory cache first (instant — no I/O)
+        const memHit = getMemCachedWorkspace(workspaceId);
+        if (memHit) {
+          console.log('[Workspace Load] Memory cache hit:', memHit.tasks.length, 'tasks');
+          setWorkspace(memHit);
+          stateVersionRef.current = `${memHit.tasks.length}:${memHit.jobCounter}`;
+          setIsLoadingWorkspace(false);
+        } else {
+          // ⚡ 2. Fall back to IndexedDB cache (fast async read)
+          const cached = await getCachedWorkspace(workspaceId);
+          if (cached) {
+            console.log('[Workspace Load] IndexedDB cache hit:', cached.tasks.length, 'tasks');
+            setWorkspace(cached);
+            stateVersionRef.current = `${cached.tasks.length}:${cached.jobCounter}`;
+            setMemCachedWorkspace(workspaceId, cached);
+            setIsLoadingWorkspace(false);
+          } else {
+            console.log('[Workspace Load] No cache found, will load from Firebase');
+          }
+        }
+
+        // Load initial workspace state
+        console.log('[Workspace Load] Loading from Firebase with workspaceId:', workspaceId);
+        const initialState = await loadWorkspaceState(workspaceId);
+        console.log('[Workspace Load] Loaded from Firebase:', {
+          tasks: initialState.tasks.length,
+          lists: initialState.lists.length,
+          spaces: initialState.spaces.length,
+          folders: initialState.folders.length
+        });
+
+        // --- Auto-dedup: remove tasks created by the runaway form submission loop ---
+        const seenKeys = new Set<string>();
+        const removedTasks: Task[] = []; // Track removed tasks for audit logging
+        const dedupedTasks = initialState.tasks.filter(task => {
+          // Key: prefer jobNumber (unique per real task), else title+listId+createdAt
+          const key = task.jobNumber
+            ? `job:${task.jobNumber}`
+            : `title:${task.title}|list:${task.listId}|date:${task.createdAt}`;
+          if (seenKeys.has(key)) {
+            // Log which task is being removed for debugging
+            console.warn(`[Dedup] Removing duplicate task:`, {
+              id: task.id,
+              jobNumber: task.jobNumber,
+              title: task.title,
+              listId: task.listId,
+              createdAt: task.createdAt,
+              key: key
+            });
+            removedTasks.push(task); // Track for audit
+            return false;
+          }
+          seenKeys.add(key);
+          return true;
+        });
+        const removedCount = initialState.tasks.length - dedupedTasks.length;
+        let cleanState = initialState;
+        if (removedCount > 0) {
+          console.warn(`[Dedup] Removing ${removedCount} duplicate tasks…`);
+          console.warn(`[Dedup] If you lost a task, check the logs above for details.`);
+          
+          // Log bulk deletion to audit trail
+          try {
+            await logTasksBulkDeleted(workspaceId, removedTasks, 'System Auto-Dedup', {
+              reason: 'Automatic duplicate task removal',
+              removedCount,
+              dedupKey: 'jobNumber or title+listId+createdAt'
+            });
+          } catch (error) {
+            console.error("Failed to log bulk task deletion:", error);
+          }
+          
+          // Find the highest real job number from surviving tasks
+          let maxJob = initialState.jobCounter ?? 0;
+          dedupedTasks.forEach(t => {
+            if (t.jobNumber) {
+              const n = parseInt(t.jobNumber.replace(/\D/g, ""), 10);
+              if (!isNaN(n) && n > maxJob) maxJob = n;
+            }
+          });
+          cleanState = { ...initialState, tasks: dedupedTasks, jobCounter: maxJob };
+          // Persist the cleaned state
+          saveWorkspaceState(workspaceId, cleanState).catch(console.error);
+        }
+        console.log('[Workspace Load] Setting workspace with', cleanState.tasks.length, 'tasks');
+        setWorkspace(cleanState);
+        stateVersionRef.current = `${cleanState.tasks.length}:${cleanState.jobCounter}`;
+        setMemCachedWorkspace(workspaceId, cleanState);
+        setCachedWorkspace(workspaceId, cleanState);
+        console.log('[Workspace Load] Workspace set successfully');
+
+        // Daily full backup: spaces, lists, custom fields, statuses, tasks, settings
+        maybeTakeDailySnapshot(workspaceId, cleanState);
+        
+        // Mark as loaded only AFTER successfully loading
+        loadedWorkspaceIdRef.current = workspaceId;
+        // Warm inventory cache in the background so clicking a task is instant
+        warmInventoryCache(workspaceId);
+        
+        // Publish all existing forms (migration for existing workspaces)
+        if (cleanState.forms && cleanState.forms.length > 0) {
+          Promise.all(
+            cleanState.forms.map(form => publishForm(workspaceId, form))
+          ).catch(error => {
+            console.error('Failed to publish existing forms:', error);
+          });
+        }
+        
+        // Subscribe to real-time updates (multi-device/tab sync)
+        // Skip ONLY if we triggered this write ourselves — Supabase only fires on real DB changes
+        unsubscribe = subscribeWorkspaceState(workspaceId, (updatedState) => {
+          console.log('[Workspace Subscription] Received update:', updatedState.tasks.length, 'tasks');
+          if (selfWriteRef.current) {
+            console.log('[Workspace Subscription] Skipping - self-write');
+            return;
+          }
+          // Use a richer fingerprint: task count + jobCounter + sum of task updatedAt ms
+          // This catches status changes, field edits, etc — not just new task creation
+          const taskSig = updatedState.tasks.reduce((acc, t) => {
+            const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+            return acc + ts;
+          }, 0);
+          const fingerprint = `${updatedState.tasks.length}:${updatedState.jobCounter}:${taskSig}`;
+          if (fingerprint === stateVersionRef.current) {
+            console.log('[Workspace Subscription] Skipping - no changes');
+            return; // truly nothing new
+          }
+          console.log('[Workspace Subscription] Applying update');
+          stateVersionRef.current = fingerprint;
+          setWorkspace(updatedState);
+          setMemCachedWorkspace(workspaceId, updatedState);
+          setCachedWorkspace(workspaceId, updatedState);
+        });
+      } catch (error) {
+        console.error('[Workspace Load] Failed to load workspace:', error);
+        // Only reset to empty workspace if we don't already have data
+        if (workspace.tasks.length === 0) {
+          console.log('[Workspace Load] Setting empty workspace (no existing data)');
+          setWorkspace(EMPTY_WORKSPACE);
+        } else {
+          console.log('[Workspace Load] Keeping existing workspace data despite error');
+        }
+      } finally {
+        setIsLoadingWorkspace(false);
+        console.log('[Workspace Load] Loading complete');
+        // Restore view from URL hash on page refresh (only runs once)
+        const savedSnap = restoreOnMount();
+        if (savedSnap) restoreNav(savedSnap);
+      }
+    };
+
+    loadAndSubscribe();
+
+    // ─── 30-second polling fallback ───────────────────────────────────────
+    // Safety net: if the WebSocket is silent (disconnected, missed event, etc.)
+    // we still pick up changes within half a minute.
+    const pollInterval = setInterval(async () => {
+      if (selfWriteRef.current) return; // skip during our own write window
+      try {
+        const fresh = await loadWorkspaceState(workspaceId);
+        const taskSig = fresh.tasks.reduce((acc, t) => {
+          const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+          return acc + ts;
+        }, 0);
+        const fingerprint = `${fresh.tasks.length}:${fresh.jobCounter}:${taskSig}`;
+        if (fingerprint === stateVersionRef.current) return;
+        stateVersionRef.current = fingerprint;
+        setWorkspace(fresh);
+        setMemCachedWorkspace(workspaceId, fresh);
+        setCachedWorkspace(workspaceId, fresh);
+      } catch {
+        // silently ignore poll errors
+      }
+    }, 30_000);
+
+    // ─── Visibility-change refresh ────────────────────────────────────────
+    // When the user switches back to the tab after being away, fetch immediately
+    const onVisible = async () => {
+      if (document.visibilityState !== 'visible') return;
+      if (selfWriteRef.current) return;
+      try {
+        const fresh = await loadWorkspaceState(workspaceId);
+        const taskSig = fresh.tasks.reduce((acc, t) => {
+          const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+          return acc + ts;
+        }, 0);
+        const fingerprint = `${fresh.tasks.length}:${fresh.jobCounter}:${taskSig}`;
+        if (fingerprint === stateVersionRef.current) return;
+        stateVersionRef.current = fingerprint;
+        setWorkspace(fresh);
+        setMemCachedWorkspace(workspaceId, fresh);
+        setCachedWorkspace(workspaceId, fresh);
+      } catch {
+        // silently ignore
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+      clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', onVisible);
+      // Don't reset loadedWorkspaceIdRef here - we want to keep it loaded
+    };
+  }, [workspaceId]);
+
+  // Save workspace changes to Firebase
+  // UI updates instantly; Firestore write is debounced to batch rapid actions
+  const updateWorkspace = useCallback((updatedWorkspace: WorkspaceState) => {
+    if (!workspaceId) return;
+
+    // Update local state immediately so the UI never lags
+    setWorkspace(updatedWorkspace);
+    const taskSig = updatedWorkspace.tasks.reduce((acc, t) => {
+      const ts = t.createdAt ? new Date(t.createdAt).getTime() : 0;
+      return acc + ts;
+    }, 0);
+    const fingerprint = `${updatedWorkspace.tasks.length}:${updatedWorkspace.jobCounter}:${taskSig}`;
+    stateVersionRef.current = fingerprint;
+    setMemCachedWorkspace(workspaceId, updatedWorkspace);
+    setCachedWorkspace(workspaceId, updatedWorkspace);
+
+    // Debounce the Firestore write — wait 400ms after the last call before writing.
+    // Rapid sequences (status change + drag + etc.) become a single write.
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      selfWriteRef.current = true;
+      try {
+        // Always save workspaceRef.current at fire-time — avoids stale-closure overwrites
+        // where a slightly-old snapshot of updatedWorkspace could erase concurrently-added tasks.
+        await saveWorkspaceState(workspaceId, workspaceRef.current);
+      } catch (error) {
+        console.error('Failed to save workspace:', error);
+      } finally {
+        // Reset after snapshot has had time to arrive (Firestore usually < 500ms)
+        setTimeout(() => { selfWriteRef.current = false; }, 1500);
+      }
+    }, 400);
+  }, [workspaceId]);
+
+  // Keep workspaceRef in sync so async callbacks always read fresh state
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  // Track submissions being processed to prevent double-handling
+  const processingRef = useRef<Set<string>>(new Set());
+  // Track recently created jobs per form to block duplicate submissions within 15 minutes.
+  // Key: `${formId}:${normalizedTitle}`, Value: Date.now() when the task was created.
+  const recentFormJobsRef = useRef<Map<string, number>>(new Map());
+
+  // Subscribe to form submissions and auto-create tasks
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    const handleSubmission = async (submission: FormSubmission & { id: string }) => {
+      // Guard: skip if already being processed
+      if (processingRef.current.has(submission.id)) return;
+      processingRef.current.add(submission.id);
+      try {
+        // Guard 1: skip stale submissions (older than 10 minutes — likely orphaned or retried)
+        const submissionAge = Date.now() - new Date(submission.submittedAt).getTime();
+        if (submissionAge > 15 * 60 * 1000) {
+          console.warn('[FormSubmission] Skipping stale submission (age:', Math.round(submissionAge / 1000), 's):', submission.id);
+          try { await deleteFormSubmission(submission.id); } catch {}
+          processingRef.current.delete(submission.id);
+          return;
+        }
+
+        // Guard 2: prevent duplicate tasks when the same form is submitted twice within 15 min.
+        // Uses a real Date.now() map so we're immune to task.createdAt being date-only strings.
+        const normalizedTitle = (submission.task.title || '')
+          .replace(/\{jobNumber\}/g, '').replace(/\s{2,}/g, ' ').trim().toLowerCase();
+        const dedupeKey = `${submission.formId}:${normalizedTitle}`;
+        const DEDUP_WINDOW = 15 * 60 * 1000; // 15 minutes
+        const lastCreated = recentFormJobsRef.current.get(dedupeKey);
+        if (lastCreated && (Date.now() - lastCreated) < DEDUP_WINDOW) {
+          console.warn('[FormSubmission] Duplicate submission blocked — same form+title created', Math.round((Date.now() - lastCreated) / 1000), 's ago. Deleting submission', submission.id);
+          try { await deleteFormSubmission(submission.id); } catch {}
+          processingRef.current.delete(submission.id);
+          return;
+        }
+
+        // Use a Firestore transaction to atomically claim the next job number and
+        // append the task — prevents race conditions when multiple forms are submitted
+        // simultaneously, which previously caused duplicate job numbers and overwrites.
+        const currentWorkspace = workspaceRef.current;
+        const form = currentWorkspace.forms?.find(f => f.id === submission.formId);
+
+        const { jobNumberStr, updatedState } = await claimJobNumberAndAddTask(
+          workspaceId,
+          submission.id, // claimed+deleted inside the transaction
+          (jobNum) => {
+            const title = (submission.task.title || "Form Submission").replace(/\{jobNumber\}/g, jobNum);
+            let customFieldValues = [...(submission.task.customFieldValues || [])];
+            if (form?.mapJobNumberToFieldId) {
+              customFieldValues = customFieldValues.filter(v => v.fieldId !== form.mapJobNumberToFieldId);
+              customFieldValues.push({ fieldId: form.mapJobNumberToFieldId, value: jobNum });
+            }
+            return {
+              ...submission.task,
+              title,
+              jobNumber: jobNum,
+              customFieldValues,
+            };
+          },
+        ) ?? { jobNumberStr: null, updatedState: null };
+
+        // null means another tab already processed this submission — bail out
+        if (!updatedState) {
+          processingRef.current.delete(submission.id);
+          return;
+        }
+
+        // Update stateVersionRef BEFORE setWorkspace so the onSnapshot guard
+        // recognises this fingerprint and does not overwrite our fresh local state
+        stateVersionRef.current = `${updatedState.tasks.length}:${updatedState.jobCounter}`;
+        setMemCachedWorkspace(workspaceId, updatedState);
+        setCachedWorkspace(workspaceId, updatedState);
+
+        // Sync local state from the transaction result
+        setWorkspace(updatedState);
+        // Submission already deleted inside the transaction — no separate call needed
+
+        console.log('Form submission processed successfully:', submission.id, 'job:', jobNumberStr);
+
+        // Record this form+title so any re-submission within 15 min is blocked
+        recentFormJobsRef.current.set(dedupeKey, Date.now());
+
+        const newTask = updatedState.tasks.find(t => t.jobNumber === jobNumberStr)!;
+
+        // Log task creation from form submission for audit trail
+        try {
+          await logTaskCreated(workspaceId, newTask, 'Form Submission System');
+        } catch (error) {
+          console.error("Failed to log form submission task creation:", error);
+        }
+
+        // Trigger WhatsApp if configured
+        try {
+          const waSettings = await loadWhatsAppSettings(workspaceId);
+          if (waSettings.enabled) {
+            const list = updatedState.lists.find(l => l.id === newTask.listId);
+            await sendTaskWhatsApp(waSettings, newTask, list?.name || "", updatedState.customFields, workspaceId);
+          }
+        } catch (waErr) {
+          console.error('[WhatsApp] Failed to send on form submission:', waErr);
+        }
+
+        // Trigger iKhokha deposit payment if configured on the form
+        if (form?.depositAmountFieldId) {
+          try {
+            const depositField = newTask.customFieldValues?.find(v => v.fieldId === form.depositAmountFieldId);
+            const depositAmount = depositField ? parseFloat(String(depositField.value)) : 0;
+            if (depositAmount > 0) {
+              const { paylinkUrl } = await createJobDepositPaylink(
+                workspaceId,
+
+                
+      } catch (error) {
+        console.error("Failed to print booking slip:", error);
+        // Don't throw - printing failure shouldn't prevent task creation
+      }
+      
+      // Log task creation for audit trail
+      try {
+        await logTaskCreated(workspaceId, newTask, user?.email || 'Unknown');
+      } catch (error) {
+        console.error("Failed to log task creation:", error);
+        // Don't throw - audit failure shouldn't prevent task creation
+      }
+
+      // Append-only backup to job_log
+      try {
+        await logNewTask(workspaceId, newTask);
+      } catch (error) {
+        console.error("Failed to backup task to job_log:", error);
+      }
+
+      // Trigger WhatsApp notification if configured
+      try {
+        const waSettings = await loadWhatsAppSettings(workspaceId);
+        if (waSettings.enabled) {
+          const currentList = workspace.lists.find(l => l.id === selectedListId);
+          await sendTaskWhatsApp(waSettings, newTask, currentList?.name || "", workspace.customFields, workspaceId);
+        }
+      } catch (waErr) {
+        console.error('[WhatsApp] Failed to send on manual task creation:', waErr);
+      }
+    }
+  };
+  const handleUpdateTask = useCallback(async (updated: Task) => {
+    // Use workspaceRef so this callback never has a stale closure even though it's memoized
+    const current = workspaceRef.current;
+    const previousTask = current.tasks.find(t => t.id === updated.id);
+
+    // ── Build ClickUp-style system activity entries ──────────────────────────
+    let taskWithActivity = updated;
+    if (previousTask) {
+      const activityEntries: TaskComment[] = [];
+      const now = new Date().toISOString();
+      const actor = (user as any)?.displayName || user?.email || 'Unknown';
+      const ts = () => `sys_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      // Status
+      if (previousTask.status !== updated.status) {
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: `Status changed from "${previousTask.status}" to "${updated.status}"` });
+      }
+      // Title
+      if (previousTask.title !== updated.title) {
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: `Title changed to "${updated.title}"` });
+      }
+      // Priority
+      if (previousTask.priority !== updated.priority) {
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: `Priority changed from "${previousTask.priority || 'none'}" to "${updated.priority || 'none'}"` });
+      }
+      // List move
+      if (previousTask.listId !== updated.listId) {
+        const fromList = current.lists.find(l => l.id === previousTask.listId);
+        const toList   = current.lists.find(l => l.id === updated.listId);
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: `Moved from "${fromList?.name || previousTask.listId}" to "${toList?.name || updated.listId}"` });
+      }
+      // Due date
+      const prevDue = previousTask.dueDate ?? '';
+      const newDue  = updated.dueDate ?? '';
+      if (prevDue !== newDue) {
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: newDue
+            ? `Due date set to ${new Date(newDue).toLocaleDateString()}`
+            : 'Due date removed' });
+      }
+      // Start date
+      const prevStart = (previousTask as any).startDate ?? '';
+      const newStart  = (updated as any).startDate ?? '';
+      if (prevStart !== newStart) {
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: newStart
+            ? `Start date set to ${new Date(newStart).toLocaleDateString()}`
+            : 'Start date removed' });
+      }
+      // Technician
+      if ((previousTask as any).technician !== (updated as any).technician) {
+        const t = (updated as any).technician;
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: t ? `Assigned to ${t}` : 'Technician removed' });
+      }
+      // Custom fields — customFieldValues is an array of {fieldId, value}, convert to map first
+      const toMap = (arr: any[]) => {
+        const m: Record<string, any> = {};
+        (arr || []).forEach((v: any) => { if (v?.fieldId !== undefined) m[v.fieldId] = v.value; });
+        return m;
+      };
+      const prevCF = toMap(previousTask.customFieldValues as any[]);
+      const newCF  = toMap(updated.customFieldValues as any[]);
+      const allCFIds = new Set([...Object.keys(prevCF), ...Object.keys(newCF)]);
+      allCFIds.forEach(fieldId => {
+        const prev = prevCF[fieldId] ?? null;
+        const next = newCF[fieldId] ?? null;
+        if (JSON.stringify(prev) === JSON.stringify(next)) return;
+        const fieldDef = current.customFields?.find((f: any) => f.id === fieldId);
+        const fieldName = fieldDef?.name || fieldId;
+        const label = (v: any) => {
+          if (v === null || v === undefined || v === '') return '—';
+          if (typeof v === 'object') return JSON.stringify(v);
+          return String(v);
+        };
+        activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+          text: `${fieldName} changed from "${label(prev)}" to "${label(next)}"` });
+      });
+      // Spare parts
+      const prevParts = (previousTask as any).sparePartsUsed ?? (previousTask as any).spareParts ?? [];
+      const newParts  = (updated as any).sparePartsUsed ?? (updated as any).spareParts ?? [];
+      if (JSON.stringify(prevParts) !== JSON.stringify(newParts)) {
+        const prevNames = new Set(prevParts.map((p: any) => p.name || p.partName || p.id));
+        const newNames  = new Set(newParts.map((p: any) => p.name || p.partName || p.id));
+        (newParts as any[]).forEach((p: any) => {
+          const n = p.name || p.partName || p.id;
+          if (!prevNames.has(n)) activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+            text: `Spare part added: ${n}` });
+        });
+        (prevParts as any[]).forEach((p: any) => {
+          const n = p.name || p.partName || p.id;
+          if (!newNames.has(n)) activityEntries.push({ id: ts(), isSystem: true, author: actor, createdAt: now,
+            text: `Spare part removed: ${n}` });
+        });
+      }
+
+      if (activityEntries.length > 0) {
+        taskWithActivity = { ...updated, comments: [...(updated.comments || []), ...activityEntries] };
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
+    // Update workspace
+    updateWorkspace({ ...current, tasks: current.tasks.map(t => t.id === taskWithActivity.id ? taskWithActivity : t) });
+    setSelectedTask(taskWithActivity);
+
+    // Log task update for audit trail
+    if (workspaceId && previousTask) {
+      try {
+        await logTaskUpdated(workspaceId, taskWithActivity, previousTask, user?.email || 'Unknown');
+      } catch (error) {
+        console.error("Failed to log task update:", error);
+      }
+    }
+  }, [updateWorkspace, workspaceId, user]);
+
+  // Batch-update multiple tasks at once (used by re-compressor to avoid race conditions)
+  const handleBatchUpdateTasks = useCallback((updatedTasks: Task[]) => {
+    const current = workspaceRef.current;
+    const updatedById = Object.fromEntries(updatedTasks.map(t => [t.id, t]));
+    updateWorkspace({ ...current, tasks: current.tasks.map(t => updatedById[t.id] ?? t) });
+  }, [updateWorkspace]);
+
+  // Navigate to the task's list and open it (used by search results & 3-dot menus)
+  const handleOpenTask = useCallback((task: Task) => {
+    setShowFormsPanel(false);
+    setShowAccountsPage(false);
+    setShowSpaceOverview(null);
+    setShowFolderOverview(null);
+    setShowTechAssessment(false);
+    setShowOutstandingRepairs(false);
+    setShowTaskCreationList(false);
+    setSelectedListId(task.listId);   // switch to the list that contains this task
+    setSearchQuery("");               // clear search so the list renders normally
+    setSelectedTask(task);
+  }, []);
+
+  // Quote generation handler — opens the same QuotationCreationPage used in Sales & Invoicing
+  const handleGenerateQuote = async (task: Task) => {
+    setQuoteTask(task);
+    // If this task already has a linked quotation, load it for editing
+    if (task.linkedQuotationId && workspaceId) {
+      try {
+        const existing = await getQuotation(workspaceId, task.linkedQuotationId);
+        setEditingQuotationForTask(existing);
+      } catch {
+        setEditingQuotationForTask(null);
+      }
+    } else {
+      setEditingQuotationForTask(null);
+    }
+    setShowQuoteDialog(true);
+  };
+
+  // Invoice generation from task handler
+  const handleGenerateInvoice = (task: Task) => {
+    setInvoiceTask(task);
+    setShowInvoiceFromTask(true);
+  };
+
+  // Fault assessment report handler
+  const handleGenerateAssessment = (task: Task) => {
+    setFaultReportTask(task);
+    setShowFaultReport(true);
+  };
+
+  const handleStatusChange = (taskId: string, status: TaskStatus) => {
+    const task = workspace.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    
+    const taskList = workspace.lists.find(l => l.id === task.listId);
+    const listStatuses = taskList?.customStatuses && taskList.customStatuses.length > 0 
+      ? taskList.customStatuses 
+      : DEFAULT_STATUSES;
+    
+    // Check if the target status exists in the task's list configuration
+    const targetStatusExists = listStatuses.some(s => s.id === status);
+    
+    if (targetStatusExists) {
+      // Target status is valid for this list, allow the change
+      updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => t.id === taskId ? { ...t, status } : t) });
+    } else {
+      // Invalid status change, don't allow
+      console.warn(`Status "${status}" is not valid for list "${taskList?.name}". Change rejected.`);
+    }
+  };
+
+  const handleMoveTask = (taskId: string, targetListId: string) => {
+    const task = workspace.tasks.find(t => t.id === taskId);
+    if (!task) return;
+    
+    const targetList = workspace.lists.find(l => l.id === targetListId);
+    const targetStatuses = targetList?.customStatuses && targetList.customStatuses.length > 0 
+      ? targetList.customStatuses 
+      : DEFAULT_STATUSES;
+    
+    // Always ask which status to assign in the target list
+    setStatusSelectionData({
+      task,
+      targetListId,
+      targetListName: targetList?.name || "Unknown List",
+      availableStatuses: targetStatuses
+    });
+    setShowStatusSelection(true);
+  };
+
+  const handleStatusSelectionConfirm = (selectedStatus: string) => {
+    if (!statusSelectionData) return;
+    
+    updateWorkspace({
+      ...workspace,
+      tasks: workspace.tasks.map(t =>
+        t.id === statusSelectionData.task?.id
+          ? { ...t, listId: statusSelectionData.targetListId, status: selectedStatus }
+          : t
+      )
+    });
+    
+    setStatusSelectionData(null);
+    setShowStatusSelection(false);
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    // Capture task before deletion for audit logging
+    const taskToDelete = workspace.tasks.find(t => t.id === taskId);
+    
+    if (selectedTask?.id === taskId) setSelectedTask(null);
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.filter(t => t.id !== taskId) });
+    
+    // Log task deletion for audit trail
+    if (workspaceId && taskToDelete) {
+      try {
+        await logTaskDeleted(workspaceId, taskToDelete, user?.email || 'Unknown');
+      } catch (error) {
+        console.error("Failed to log task deletion:", error);
+        // Don't throw - audit failure shouldn't prevent task deletion
+      }
+    }
+  };
+
+  const handleArchiveAllInStatus = (statusId: string) => {
+    updateWorkspace({
+      ...workspace,
+      tasks: workspace.tasks.map(t =>
+        t.status === statusId && t.listId === selectedListId ? { ...t, archived: true } : t
+      ),
+    });
+  };
+
+  const handleArchiveTask = useCallback((taskId: string) => {
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => t.id === taskId ? { ...t, archived: true } : t) });
+  }, [workspace]);
+
+  const handleUnarchiveTask = useCallback((taskId: string) => {
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => t.id === taskId ? { ...t, archived: false } : t) });
+  }, [workspace]);
+
+  // ── Bulk / multi-select handlers ─────────────────────────────────────────
+  const handleToggleSelect = useCallback((id: string) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAllInStatus = useCallback((statusOrIds: string, taskIds: string[]) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      if (taskIds.length === 0) {
+        // deselect all in this status
+        prev.forEach(id => {
+          const t = workspace.tasks.find(t => t.id === id);
+          if (t && t.status === statusOrIds) next.delete(id);
+        });
+      } else {
+        taskIds.forEach(id => next.add(id));
+      }
+      return next;
+    });
+  }, [workspace.tasks]);
+
+  const handleClearSelection = useCallback(() => setSelectedTaskIds(new Set()), []);
+
+  const handleDeleteSelected = useCallback(async () => {
+    const ids = Array.from(selectedTaskIds);
+    if (ids.length === 0) return;
+    const tasksToDelete = workspace.tasks.filter(t => ids.includes(t.id));
+    if (selectedTask && ids.includes(selectedTask.id)) setSelectedTask(null);
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.filter(t => !ids.includes(t.id)) });
+    setSelectedTaskIds(new Set());
+    if (workspaceId && tasksToDelete.length > 0) {
+      try { await logTasksBulkDeleted(workspaceId, tasksToDelete, user?.email || 'Unknown', {}); } catch { /* non-fatal */ }
+    }
+  }, [selectedTaskIds, workspace, selectedTask, workspaceId, user]);
+
+  const handleArchiveSelected = useCallback(() => {
+    const ids = Array.from(selectedTaskIds);
+    if (ids.length === 0) return;
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, archived: true } : t) });
+    setSelectedTaskIds(new Set());
+  }, [selectedTaskIds, workspace]);
+
+  const handleBulkStatusChange = useCallback((status: string) => {
+    const ids = Array.from(selectedTaskIds);
+    if (ids.length === 0) return;
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, status: status as TaskStatus } : t) });
+    setSelectedTaskIds(new Set());
+  }, [selectedTaskIds, workspace]);
+
+  const handleBulkMoveToList = useCallback((targetListId: string) => {
+    const ids = Array.from(selectedTaskIds);
+    if (ids.length === 0) return;
+    const targetList = workspace.lists.find(l => l.id === targetListId);
+    const targetStatuses = targetList?.customStatuses?.length ? targetList.customStatuses : DEFAULT_STATUSES;
+    const firstStatus = targetStatuses[0]?.id || 'to_do';
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, listId: targetListId, status: firstStatus as TaskStatus } : t) });
+    setSelectedTaskIds(new Set());
+  }, [selectedTaskIds, workspace]);
+
+  const handleDuplicateTask = (task: Task) => {
+    const newTask: Task = {
+      ...task,
+      id: `t${Date.now()}`,
+      title: `${task.title} (copy)`,
+      jobNumber: undefined,
+      createdAt: new Date().toISOString().split('T')[0],
+      comments: [],
+    };
+    updateWorkspace({ ...workspace, tasks: [...workspace.tasks, newTask] });
+  };
+
+  // Rename handlers
+  const handleRenameSpace = (id: string, name: string) => {
+    updateWorkspace({ ...workspace, spaces: workspace.spaces.map(s => s.id === id ? { ...s, name } : s) });
+  };
+  const handleRenameFolder = (id: string, name: string) => {
+    updateWorkspace({ ...workspace, folders: workspace.folders.map(f => f.id === id ? { ...f, name } : f) });
+  };
+  const handleRenameList = (id: string, name: string) => {
+    updateWorkspace({ ...workspace, lists: workspace.lists.map(l => l.id === id ? { ...l, name } : l) });
+  };
+
+  // Delete handlers (cascade)
+  const handleDeleteSpace = (id: string) => {
+    const folderIds = workspace.folders.filter(f => f.spaceId === id).map(f => f.id);
+    const listIds = workspace.lists.filter(l =>
+      (l.parentType === "space" && l.parentId === id) ||
+      (l.parentType === "folder" && folderIds.includes(l.parentId))
+    ).map(l => l.id);
+    
+    updateWorkspace({
+      ...workspace,
+      spaces: workspace.spaces.filter(s => s.id !== id),
+      folders: workspace.folders.filter(f => f.spaceId !== id),
+      lists: workspace.lists.filter(l => !listIds.includes(l.id)),
+      tasks: workspace.tasks.filter(t => !listIds.includes(t.listId)),
+    });
+    
+    if (selectedListId) {
+      const list = workspace.lists.find(l => l.id === selectedListId);
+      if (list) {
+        const belongsToSpace = list.parentType === "space" && list.parentId === id;
+        const folder = list.parentType === "folder" ? workspace.folders.find(f => f.id === list.parentId) : null;
+        if (belongsToSpace || (folder && folder.spaceId === id)) setSelectedListId(null);
+      }
+    }
+  };
+  const handleDeleteFolder = (id: string) => {
+    const listIds = workspace.lists.filter(l => l.parentId === id && l.parentType === "folder").map(l => l.id);
+    updateWorkspace({
+      ...workspace,
+      folders: workspace.folders.filter(f => f.id !== id),
+      lists: workspace.lists.filter(l => !listIds.includes(l.id)),
+      tasks: workspace.tasks.filter(t => !listIds.includes(t.listId)),
+    });
+  };
+  const handleDeleteList = (id: string) => {
+    updateWorkspace({
+      ...workspace,
+      lists: workspace.lists.filter(l => l.id !== id),
+      tasks: workspace.tasks.filter(t => t.listId !== id),
+    });
+    if (selectedListId === id) setSelectedListId(null);
+  };
+
+  // Custom fields handlers
+  const getCfTargetName = () => {
+    if (!cfTarget) return "";
+    if (cfTarget.type === "space") return workspace.spaces.find(s => s.id === cfTarget.id)?.name || "";
+    if (cfTarget.type === "folder") return workspace.folders.find(f => f.id === cfTarget.id)?.name || "";
+    return workspace.lists.find(l => l.id === cfTarget.id)?.name || "";
+  };
+  const getCfVisibleIds = () => {
+    if (!cfTarget) return [];
+    if (cfTarget.type === "space") return workspace.spaces.find(s => s.id === cfTarget.id)?.visibleFieldIds || [];
+    if (cfTarget.type === "folder") return workspace.folders.find(f => f.id === cfTarget.id)?.visibleFieldIds || [];
+    return workspace.lists.find(l => l.id === cfTarget.id)?.visibleFieldIds || [];
+  };
+  const handleToggleField = (fieldId: string) => {
+    if (!cfTarget) return;
+    const toggle = (ids: string[]) => ids.includes(fieldId) ? ids.filter(i => i !== fieldId) : [...ids, fieldId];
+    
+    let updatedWorkspace = { ...workspace };
+    if (cfTarget.type === "space") {
+      updatedWorkspace.spaces = workspace.spaces.map(s => s.id === cfTarget.id ? { ...s, visibleFieldIds: toggle(s.visibleFieldIds || []) } : s);
+    } else if (cfTarget.type === "folder") {
+      updatedWorkspace.folders = workspace.folders.map(f => f.id === cfTarget.id ? { ...f, visibleFieldIds: toggle(f.visibleFieldIds || []) } : f);
+    } else {
+      updatedWorkspace.lists = workspace.lists.map(l => l.id === cfTarget.id ? { ...l, visibleFieldIds: toggle(l.visibleFieldIds || []) } : l);
+    }
+    updateWorkspace(updatedWorkspace);
+  };
+  const handleCreateField = (field: Omit<CustomFieldDefinition, "id">) => {
+    const id = `cf${Date.now()}`;
+    let updated = { ...workspace, customFields: [...workspace.customFields, { ...field, id }] };
+    
+    // Auto-add to current target's visible fields
+    if (cfTarget) {
+      if (cfTarget.type === "space") {
+        updated.spaces = updated.spaces.map(s => s.id === cfTarget.id ? { ...s, visibleFieldIds: [...(s.visibleFieldIds || []), id] } : s);
+      } else if (cfTarget.type === "folder") {
+        updated.folders = updated.folders.map(f => f.id === cfTarget.id ? { ...f, visibleFieldIds: [...(f.visibleFieldIds || []), id] } : f);
+      } else {
+        updated.lists = updated.lists.map(l => l.id === cfTarget.id ? { ...l, visibleFieldIds: [...(l.visibleFieldIds || []), id] } : l);
+      }
+    }
+    updateWorkspace(updated);
+  };
+
+  const handleEditField = (id: string, changes: Partial<Omit<CustomFieldDefinition, "id">>) => {
+    updateWorkspace({
+      ...workspace,
+      customFields: workspace.customFields.map(f => f.id === id ? { ...f, ...changes } : f),
+    });
+  };
+
+  const handleDeleteField = (id: string) => {
+    updateWorkspace({
+      ...workspace,
+      customFields: workspace.customFields.filter(f => f.id !== id),
+    });
+  };
+
+  // Form handlers
+  const handleSaveForm = async (form: FormDefinition) => {
+    if (!workspaceId) return;
+    
+    const exists = workspace.forms.some(f => f.id === form.id);
+    updateWorkspace({
+      ...workspace,
+      forms: exists ? workspace.forms.map(f => f.id === form.id ? form : f) : [...workspace.forms, form],
+    });
+    
+    // Publish form for public access
+    try {
+      await publishForm(workspaceId, form);
+    } catch (error) {
+      console.error('Failed to publish form:', error);
+    }
+  };
+  const handleDeleteForm = async (id: string) => {
+    updateWorkspace({ ...workspace, forms: workspace.forms.filter(f => f.id !== id) });
+    
+    // Unpublish form from public access
+    try {
+      await unpublishForm(id);
+    } catch (error) {
+      console.error('Failed to unpublish form:', error);
+    }
+  };
+
+  // Show loading while auth or workspace is loading
+  if (loading || isLoadingWorkspace) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="flex flex-col items-center gap-4 text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <div className="space-y-1">
+            <p className="text-sm font-medium">
+              {loading ? 'Authenticating...' : 'Loading workspace...'}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {loading 
+                ? 'Verifying your credentials' 
+                : 'Setting up your workspace'
+              }
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <SidebarProvider
+      defaultOpen={true}
+      style={{ '--sidebar-width': `${sidebarWidth}px` } as React.CSSProperties}
+    >
+      <div className="flex h-dvh w-full bg-background mobile-safe-layout">
+        <CrmSidebar
+          workspace={workspace}
+          selectedListId={selectedListId}
+          onSelectList={(id) => { closeAllOverlays(); setSelectedListId(id); setShowFormsPanel(false); setShowAccountsPage(false); setShowSpaceOverview(null); setShowFolderOverview(null); }}
+          onCreateSpace={() => setShowCreateSpace(true)}
+          onCreateFolder={(spaceId) => setCreateFolderSpaceId(spaceId)}
+          onCreateList={(parentId, parentType) => setCreateListParent({ id: parentId, type: parentType })}
+          onRenameSpace={handleRenameSpace}
+          onRenameFolder={handleRenameFolder}
+          onRenameList={handleRenameList}
+          onDeleteSpace={handleDeleteSpace}
+          onDeleteFolder={handleDeleteFolder}
+          onDeleteList={handleDeleteList}
+          onOpenCustomFields={(id, type) => setCfTarget({ id, type })}
+          onTaskStatuses={(listId) => setShowStatusManager(listId)}
+          onOpenForms={() => { closeAllOverlays(); setShowFormsPanel(true); setSelectedListId(null); setShowAccountsPage(false); setShowSpaceOverview(null); setShowFolderOverview(null); }}
+          onOpenAccounts={() => { closeAllOverlays(); setShowAccountsPage(true); setShowFormsPanel(false); setSelectedListId(null); setShowSpaceOverview(null); setShowFolderOverview(null); }}
+          onSpaceOverview={(spaceId) => { closeAllOverlays(); setShowSpaceOverview(spaceId); setShowFormsPanel(false); setShowAccountsPage(false); setSelectedListId(null); setShowFolderOverview(null); }}
+          onFolderOverview={(folderId) => { closeAllOverlays(); setShowFolderOverview(folderId); setShowSpaceOverview(null); setShowFormsPanel(false); setShowAccountsPage(false); setSelectedListId(null); }}
+          onManagePermissions={(id, type) => setShowPermissionManager({ id, type })}
+          onManageUsers={() => setShowUserManagement(true)}
+          onManageWorkspaces={() => setShowWorkspaceManagement(true)}
+          onOpenWhatsApp={() => setShowWhatsApp(true)}
+          onOpenInventory={() => { closeAllOverlays(); setShowInventory(true); }}
+          onOpenStockMovements={() => { closeAllOverlays(); setShowStockMovements(true); }}
+          onOpenQuotations={() => { closeAllOverlays(); setShowQuotations(true); }}
+          onOpenInvoicing={() => { closeAllOverlays(); setShowInvoicing(true); }}
+          onOpenCustomers={() => { closeAllOverlays(); setShowCustomers(true); }}
+          onOpenStatements={() => { closeAllOverlays(); setShowStatements(true); }}
+          onOpenBusinessOverview={() => { closeAllOverlays(); setShowBusinessOverview(true); }}
+          onOpenTechAssessment={() => { closeAllOverlays(); setShowTechAssessment(true); }}
+          onOpenOutstandingRepairs={() => { closeAllOverlays(); setShowOutstandingRepairs(true); }}
+          onOpenTaskCreationList={() => { closeAllOverlays(); setShowTaskCreationList(true); }}
+          onOpenSalesOverview={() => { closeAllOverlays(); setShowSalesOverview(true); }}
+          onOpenInventoryOverview={() => { closeAllOverlays(); setShowInventoryOverview(true); }}
+          onOpenInvoiceRegister={() => { closeAllOverlays(); setShowInvoiceRegister(true); }}
+          onOpenInventoryRegister={() => { closeAllOverlays(); setShowInventoryRegister(true); }}
+          onOpenBanking={() => { closeAllOverlays(); setShowBanking(true); }}
+          onDropTask={handleMoveTask}
+          onOpenSalesSettings={() => setShowSalesSettings(true)}
+          onOpenPrinter={() => setShowPrinter(true)}
+          onOpenActivityMonitor={() => setShowActivityMonitor(true)}
+          onOpenWhatsAppLogs={() => setShowWhatsAppLogs(true)}
+          onOpenEmailSettings={() => setShowEmailSettings(true)}
+          onOpenEcommerceSettings={() => setShowEcommerceSettings(true)}
+          onOpenIkhokhaJobSettings={() => setShowIkhokhaJobSettings(true)}
+          onOpenJobSettings={() => setShowJobSettings(true)}
+          onOpenFieldMapper={() => setShowFieldMapper(true)}
+          onShowTaskRecovery={() => setShowTaskRecovery(true)}
+          onChangePassword={() => setShowChangePassword(true)}
+          isOwner={myRole === 'owner'}
+        />
+        {/* Sidebar resize handle — hidden on mobile where sidebar is a sheet */}
+        <div
+          className="hidden md:block w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors flex-shrink-0 z-20"
+          onMouseDown={onSidebarResizeStart}
+          title="Drag to resize sidebar"
+        />
+        <div className="flex flex-col flex-1 overflow-hidden mobile-main-content relative">
+          {isImpersonated && (
+            <div className="flex items-center justify-between gap-3 px-4 py-2 bg-amber-400 text-amber-950 text-xs font-medium shrink-0 z-50">
+              <span>👁️ Viewing as <strong>{user?.email}</strong> — this is an admin impersonation session</span>
+              <button
+                onClick={async () => {
+                  sessionStorage.removeItem('impersonated');
+                  await supabase.auth.signOut();
+                  window.close();
+                }}
+                className="bg-amber-950 text-amber-100 px-3 py-1 rounded text-xs font-semibold hover:bg-amber-900 transition-colors whitespace-nowrap"
+              >
+                ✕ End Session
+              </button>
+            </div>
+          )}
+          {!showFormsPanel && !showAccountsPage && !showSpaceOverview && !showFolderOverview && !anyOverlayActive && (
+            <CrmHeader
+              currentList={currentList}
+              breadcrumb={breadcrumb}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              onSearchOpen={() => setShowSearch(true)}
+              onCreateTask={() => { setCreateTaskStatus(undefined); setShowCreateTask(true); }}
+              companyName={companyName}
+              canGoBack={canGoBack}
+              canGoForward={canGoForward}
+              onBack={navBack}
+              onForward={navForward}
+              onRefresh={handleRefresh}
+              isRefreshing={isRefreshing}
+            />
+          )}
+          {/* Floating nav pill — visible when a full-screen overlay is active */}
+          {(anyOverlayActive || showAccountsPage || showSpaceOverview || showFolderOverview || showFormsPanel) && (
+            <div className="absolute top-3 right-4 z-50 flex items-center gap-0.5 bg-background/90 backdrop-blur-sm border border-border rounded-lg px-1.5 py-1 shadow-md">
+              <button
+                onClick={navBack}
+                disabled={!canGoBack}
+                title="Go back"
+                className={`p-1 rounded transition-colors ${canGoBack ? "text-muted-foreground hover:text-foreground hover:bg-accent" : "text-muted-foreground/25 cursor-default"}`}
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              </button>
+              <button
+                onClick={navForward}
+                disabled={!canGoForward}
+                title="Go forward"
+                className={`p-1 rounded transition-colors ${canGoForward ? "text-muted-foreground hover:text-foreground hover:bg-accent" : "text-muted-foreground/25 cursor-default"}`}
+              >
+                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+              </button>
+              <div className="w-px h-4 bg-border mx-0.5" />
+              <button
+                onClick={handleRefresh}
+                title="Refresh data"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              >
+                <svg className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              </button>
+            </div>
+          )}
+          <div className="flex flex-1 overflow-hidden">
+            <div className={!isMobile && selectedTask && !anyOverlayActive ? "flex-1 overflow-y-auto min-w-0" : "flex-1 overflow-y-auto"}>
+              {showWorkspaceManagement ? (
+                <div className="h-full">
+                  <WorkspaceManagement />
+                </div>
+              ) : showAccountsPage ? (
+                <AccountsPage
+                  workspace={workspace}
+                  onUpdateWorkspace={updateWorkspace}
+                  userId={user?.uid || ''}
+                  onTaskClick={(taskId) => {
+                    const task = workspace.tasks.find(t => t.id === taskId);
+                    if (task) handleOpenTask(task);
+                  }}
+                />
+              ) : showSpaceOverview ? (
+                <SpaceOverview
+                  spaceId={showSpaceOverview}
+                  workspace={workspace}
+                  onUpdateWorkspace={updateWorkspace}
+                  onTaskClick={(taskId) => {
+                    const task = workspace.tasks.find(t => t.id === taskId);
+                    if (task) handleOpenTask(task);
+                  }}
+                />
+              ) : showFolderOverview ? (
+                <FolderOverview
+                  folderId={showFolderOverview}
+                  workspace={workspace}
+                  onSelectList={(id) => { closeAllOverlays(); setSelectedListId(id); setShowFolderOverview(null); }}
+                  onCreateList={(parentId, parentType) => setCreateListParent({ id: parentId, type: parentType })}
+                />
+              ) : showFormsPanel ? (
+                <FormListPanel
+                  forms={workspace.forms}
+                  lists={workspace.lists}
+                  onCreateForm={() => { setEditingForm(null); setShowFormBuilder(true); }}
+                  onEditForm={(form) => { setEditingForm(form); setShowFormBuilder(true); }}
+                  onDeleteForm={handleDeleteForm}
+                />
+              ) : !selectedListId ? (
+                <div className="flex items-center justify-center h-full text-muted-foreground">
+                  <p>Select a list from the sidebar to view tasks</p>
+                </div>
+              ) : (
+                <div className="flex flex-col h-full">
+                  {/* Search Results Indicator */}
+                  {searchQuery && (
+                    <div className="px-4 py-2 bg-muted/30 border-b text-sm text-muted-foreground">
+                      <div className="flex items-center justify-between gap-3">
+                        <span>
+                          {filteredTasks.length} {filteredTasks.length === 1 ? 'result' : 'results'} for &ldquo;{searchQuery}&rdquo; across all lists
+                        </span>
+                        <button
+                          onClick={() => setSearchIncludeArchived(v => !v)}
+                          className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                            searchIncludeArchived
+                              ? 'bg-amber-100 border-amber-400 text-amber-700 dark:bg-amber-900/40 dark:border-amber-600 dark:text-amber-400'
+                              : 'bg-background border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                          }`}
+                        >
+                          <Archive className="h-3 w-3" />
+                          {searchIncludeArchived ? 'Archived included' : 'Include archived'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Jobs with Issues Indicator */}
+                  {selectedListId === JOBS_WITH_ISSUES_SPACE_ID && (
+                    <div className="px-4 py-3 bg-orange-50 border-b border-orange-200 text-sm">
+                      <div className="flex items-center gap-2 text-orange-800">
+                        <span className="text-base">⚠️</span>
+                        <div>
+                          <div className="font-medium">Jobs with Issues</div>
+                          <div className="text-xs text-orange-600 mt-1">
+                            Tasks shown here are missing photos. Upload photos to move them back to their regular lists.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Task Views */}
+                  <div className="flex-1 overflow-hidden relative">
+                    {/* Floating bulk action bar — shown in list view when tasks are selected */}
+                    {viewMode === "list" && selectedTaskIds.size > 0 && (
+                      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 bg-background border border-border shadow-xl rounded-full px-4 py-2 flex-wrap max-w-[92vw]">
+                        <CheckSquare className="h-4 w-4 text-primary flex-shrink-0" />
+                        <span className="text-sm font-semibold mr-1">{selectedTaskIds.size} selected</span>
+
+                        {/* Change Status */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="rounded-full h-7 gap-1 px-3">
+                              Change Status <ChevronDown className="h-3 w-3" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="center" className="max-h-64 overflow-y-auto">
+                            {(workspace.lists.find(l => l.id === selectedListId)?.customStatuses || DEFAULT_STATUSES).map(s => (
+                              <DropdownMenuItem key={s.id} onClick={() => handleBulkStatusChange(s.id)}>
+                                {s.label}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        {/* Move to List */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="rounded-full h-7 gap-1 px-3">
+                              <MoveRight className="h-3.5 w-3.5" /> Move to <ChevronDown className="h-3 w-3" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="center" className="max-h-64 overflow-y-auto">
+                            {workspace.lists.filter(l => l.id !== selectedListId).map(l => (
+                              <DropdownMenuItem key={l.id} onClick={() => handleBulkMoveToList(l.id)}>
+                                {l.name}
+                              </DropdownMenuItem>
+                            ))}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        <Button variant="outline" size="sm" className="rounded-full h-7 gap-1.5 px-3" onClick={handleArchiveSelected}>
+                          <Archive className="h-3.5 w-3.5" /> Archive
+                        </Button>
+                        <Button variant="destructive" size="sm" className="rounded-full h-7 gap-1.5 px-3" onClick={handleDeleteSelected}>
+                          <Trash2 className="h-3.5 w-3.5" /> Delete
+                        </Button>
+                        <button className="text-muted-foreground hover:text-foreground ml-1 flex-shrink-0" onClick={handleClearSelection}>
+                          <X className="h-4 w-4" />
+                        </button>
+                      </div>
+                    )}
+                    {viewMode === "board" ? (
+                      <TaskBoardView
+                        tasks={filteredTasks}
+                        visibleFields={visibleFields}
+                        customStatuses={workspace.lists.find(l => l.id === selectedListId)?.customStatuses}
+                        onSelectTask={handleOpenTask}
+                        onStatusChange={handleStatusChange}
+                        onCreateTask={(status) => { setCreateTaskStatus(status); setShowCreateTask(true); }}
+                        onDeleteTask={handleDeleteTask}
+                        onArchiveAllInStatus={handleArchiveAllInStatus}
+                        onDuplicateTask={handleDuplicateTask}
+                        onEditTask={(task) => handleOpenTask(task)}
+                        onMoveTask={(task) => handleOpenTask(task)}
+                        selectedTaskIds={selectedTaskIds}
+                        onToggleSelect={handleToggleSelect}
+                        onSelectAllInStatus={handleSelectAllInStatus}
+                        onDeleteSelected={handleDeleteSelected}
+                        onArchiveSelected={handleArchiveSelected}
+                        onBulkStatusChange={handleBulkStatusChange}
+                        onBulkMoveToList={handleBulkMoveToList}
+                        onClearSelection={handleClearSelection}
+                        availableLists={workspace.lists.filter(l => l.id !== selectedListId).map(l => ({ id: l.id, name: l.name }))}
+                        archivedTasks={workspace.tasks.filter(t => t.listId === selectedListId && !!t.archived)}
+                        onArchiveTask={handleArchiveTask}
+                        onUnarchiveTask={handleUnarchiveTask}
+                      />
+                    ) : (
+                      <TaskListView
+                        tasks={filteredTasks}
+                        visibleFields={visibleFields}
+                        customStatuses={workspace.lists.find(l => l.id === selectedListId)?.customStatuses}
+                        onSelectTask={handleOpenTask}
+                        selectedTaskIds={selectedTaskIds}
+                        onToggleSelect={handleToggleSelect}
+                      />
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Drop zone — drag any task here to open it when no panel is shown */}
+            {!isMobile && !selectedTask && isDraggingTask && !anyOverlayActive && (
+              <div
+                className="shrink-0 w-72 border-l-2 border-dashed border-primary/60 bg-primary/5 flex flex-col items-center justify-center gap-2 text-primary/70 text-sm font-medium transition-all"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleDropToOpenTask}
+              >
+                <span className="text-3xl">📋</span>
+                <span>Drop here to open task</span>
+              </div>
+            )}
+
+            {/* Desktop Task Detail — inline resizable side panel */}
+            {!isMobile && selectedTask && !anyOverlayActive && (
+              <div
+                className="relative flex shrink-0 border-l border-border bg-background overflow-hidden"
+                style={{ width: panelWidth }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={handleDropToOpenTask}
+              >
+                {/* Resize handle */}
+                <div
+                  onMouseDown={onResizeStart}
+                  className="absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 z-10 transition-colors"
+                  title="Drag to resize"
+                />
+                <div className="flex-1 overflow-hidden">
+                  <TaskDetailPanel 
+                    task={selectedTask} 
+                    visibleFields={taskVisibleFields} 
+                    allFields={workspace.customFields} 
+                    allLists={workspace.lists} 
+                    onUpdate={handleUpdateTask} 
+                    onMoveTask={handleMoveTask} 
+                    onClose={() => setSelectedTask(null)}
+                    isFullScreen={false}
+                    currentViewContext={selectedListId === JOBS_WITH_ISSUES_SPACE_ID ? "Jobs with Issues" : undefined}
+                    onGenerateQuote={handleGenerateQuote}
+                    onGenerateInvoice={handleGenerateInvoice}
+                    onGenerateAssessment={handleGenerateAssessment}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* PAGE OVERLAYS — inside main content column so sidebar stays visible */}
+          {showInventory && (
+            <InventoryPage onClose={() => setShowInventory(false)} />
+          )}
+          {showStockMovements && (
+            <div className="absolute inset-0 z-30 bg-background overflow-y-auto">
+              <div className="relative">
+                <button
+                  onClick={() => setShowStockMovements(false)}
+                  className="absolute top-4 right-4 z-10 p-2 bg-gray-100 hover:bg-gray-200 rounded-full"
+                >
+                  <svg className="w-6 h-6" fill="none" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24" stroke="currentColor">
+                    <path d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                <StockMovementsPage />
+              </div>
+            </div>
+          )}
+          {showQuotations && (
+            <QuotationManagementPage
+              onClose={() => { setShowQuotations(false); setInitialQuotationId(undefined); }}
+              initialQuotationId={initialQuotationId}
+              onQuotationDeleted={(quotationId) => {
+                updateWorkspace({
+                  ...workspace,
+                  tasks: workspace.tasks.map(t =>
+                    t.linkedQuotationId === quotationId
+                      ? { ...t, linkedQuotationId: undefined }
+                      : t
+                  ),
+                });
+              }}
+            />
+          )}
+          {showInvoicing && (
+            <InvoiceManagementPage onClose={() => { setShowInvoicing(false); setInitialInvoiceId(undefined); }} initialInvoiceId={initialInvoiceId} />
+          )}
+          {showCustomers && (
+            <CustomerPage onClose={() => setShowCustomers(false)} />
+          )}
+          {showStatements && (
+            <StatementPage onClose={() => setShowStatements(false)} />
+          )}
+          {showBusinessOverview && (
+            <BusinessOverviewPage
+              onClose={() => setShowBusinessOverview(false)}
+              workspace={workspace}
+              onOpenTask={(taskId) => { const t = workspace.tasks.find(t => t.id === taskId); if (t) { setShowBusinessOverview(false); handleOpenTask(t); } }}
+              onOpenInvoice={(id) => { setShowBusinessOverview(false); setInitialInvoiceId(id); closeAllOverlays(); setShowInvoicing(true); }}
+              onOpenQuotation={(id) => { setShowBusinessOverview(false); setInitialQuotationId(id); closeAllOverlays(); setShowQuotations(true); }}
+            />
+          )}
+          {showTechAssessment && (
+            <TechAssessmentPage 
+              onClose={() => setShowTechAssessment(false)} 
+              workspace={workspace}
+              onOpenTask={handleOpenTask}
+            />
+          )}
+          {showOutstandingRepairs && (
+            <OutstandingRepairsPage
+              onClose={() => setShowOutstandingRepairs(false)}
+              workspace={workspace}
+              onOpenTask={(task) => { setShowOutstandingRepairs(false); handleOpenTask(task); }}
+            />
+          )}
+          {showTaskCreationList && (
+            <TaskCreationListPage
+              onClose={() => setShowTaskCreationList(false)}
+              workspace={workspace}
+              onOpenTask={(task) => { setShowTaskCreationList(false); handleOpenTask(task); }}
+              onUpdateTask={handleUpdateTask}
+            />
+          )}
+          {showSalesOverview && (
+            <SalesOverviewPage
+              onClose={() => setShowSalesOverview(false)}
+              workspace={workspace}
+              onGoCustomers={() => { setShowSalesOverview(false); setShowCustomers(true); }}
+              onGoQuotations={() => { setShowSalesOverview(false); setShowQuotations(true); }}
+              onGoInvoices={() => { setShowSalesOverview(false); setShowInvoicing(true); }}
+              onOpenInvoice={(id) => { setShowSalesOverview(false); setInitialInvoiceId(id); setShowInvoicing(true); }}
+              onOpenQuotation={(id) => { setShowSalesOverview(false); setInitialQuotationId(id); setShowQuotations(true); }}
+            />
+          )}
+          {showInventoryOverview && (
+            <InventoryOverviewPage
+              onClose={() => setShowInventoryOverview(false)}
+              onGoProducts={() => { setShowInventoryOverview(false); setShowInventory(true); }}
+              onGoStockMovements={() => { setShowInventoryOverview(false); setShowStockMovements(true); }}
+            />
+          )}
+          {showInvoiceRegister && (
+            <InvoiceRegisterPage
+              onClose={() => setShowInvoiceRegister(false)}
+              workspaceId={workspaceId}
+              onOpenInvoice={(id) => { setShowInvoiceRegister(false); setInitialInvoiceId(id); setShowInvoicing(true); }}
+            />
+          )}
+          {showInventoryRegister && (
+            <InventoryRegisterPage
+              onClose={() => setShowInventoryRegister(false)}
+              workspaceId={workspaceId}
+              onOpenItem={() => { setShowInventoryRegister(false); setShowInventory(true); }}
+            />
+          )}
+          {showBanking && (
+            <BankingMatchingPage onClose={() => setShowBanking(false)} />
+          )}
+        </div>
+        <CreateSpaceDialog open={showCreateSpace} onClose={() => setShowCreateSpace(false)} onCreate={handleCreateSpace} />
+        {createFolderSpaceId && <CreateFolderDialog open={!!createFolderSpaceId} onClose={() => setCreateFolderSpaceId(null)} onCreate={handleCreateFolder} spaceId={createFolderSpaceId} />}
+        {createListParent && <CreateListDialog open={!!createListParent} onClose={() => setCreateListParent(null)} onCreate={handleCreateList} parentId={createListParent.id} parentType={createListParent.type} />}
+        <CreateTaskDialog open={showCreateTask} onClose={() => setShowCreateTask(false)} onCreate={handleCreateTask} defaultStatus={createTaskStatus} />
+        <StatusSelectionDialog
+          open={showStatusSelection}
+          onClose={() => setShowStatusSelection(false)}
+          task={statusSelectionData?.task || null}
+          targetListName={statusSelectionData?.targetListName || ""}
+          availableStatuses={statusSelectionData?.availableStatuses || []}
+          onConfirm={handleStatusSelectionConfirm}
+        />
+        {cfTarget && (
+          <CustomFieldsManager
+            open={!!cfTarget}
+            onClose={() => setCfTarget(null)}
+            allFields={workspace.customFields}
+            visibleFieldIds={getCfVisibleIds()}
+            contextName={getCfTargetName()}
+            contextType={cfTarget.type}
+            onToggleField={handleToggleField}
+            onCreateField={handleCreateField}
+            onEditField={handleEditField}
+            onDeleteField={handleDeleteField}
+          />
+        )}
+        {showFormBuilder && (
+          <FormBuilder
+            open={showFormBuilder}
+            onClose={() => { setShowFormBuilder(false); setEditingForm(null); }}
+            onSave={handleSaveForm}
+            existingForm={editingForm || undefined}
+            lists={workspace.lists}
+            customFields={workspace.customFields}
+          />
+        )}
+
+        {/* Mobile Task Detail Full-screen */}
+        {isMobile && selectedTask && (
+          <TaskDetailPanel 
+            task={selectedTask} 
+            visibleFields={taskVisibleFields} 
+            allFields={workspace.customFields} 
+            allLists={workspace.lists} 
+            onUpdate={handleUpdateTask} 
+            onMoveTask={handleMoveTask} 
+            onClose={() => setSelectedTask(null)}
+            isFullScreen={true}
+            currentViewContext={selectedListId === JOBS_WITH_ISSUES_SPACE_ID ? "Jobs with Issues" : undefined}
+            onGenerateQuote={handleGenerateQuote}
+            onGenerateInvoice={handleGenerateInvoice}
+            onGenerateAssessment={handleGenerateAssessment}
+          />
+        )}
+
+        {/* WhatsApp Settings Dialog */}
+        <WhatsAppSettingsDialog
+          open={showWhatsApp}
+          onClose={() => setShowWhatsApp(false)}
+          customFields={workspace.customFields}
+        />
+
+        {/* Fault Assessment Report Dialog */}
+        {showFaultReport && faultReportTask && (
+          <FaultReportDialog
+            open={showFaultReport}
+            onClose={() => { setShowFaultReport(false); setFaultReportTask(null); }}
+            task={faultReportTask}
+            customFields={workspace.customFields}
+          />
+        )}
+
+        {/* Thermal Printer Settings Dialog */}
+        <PrinterSettingsDialog
+          open={showPrinter}
+          onClose={() => setShowPrinter(false)}
+          workspaceId={workspaceId!}
+          customFields={workspace.customFields}
+        />
+
+        {/* User Management Dialog */}
+        <UserManagement
+          open={showUserManagement}
+          onClose={() => setShowUserManagement(false)}
+        />
+
+        {/* Email Settings Dialog */}
+        <EmailSettingsDialog
+          open={showEmailSettings}
+          onClose={() => setShowEmailSettings(false)}
+        />
+
+        {/* Ecommerce Settings Dialog */}
+        <EcommerceSettingsDialog
+          open={showEcommerceSettings}
+          onClose={() => setShowEcommerceSettings(false)}
+        />
+
+        {/* iKhokha CRM Job Settings Dialog */}
+        {workspaceId && (
+          <IkhokhaJobSettingsDialog
+            open={showIkhokhaJobSettings}
+            onClose={() => setShowIkhokhaJobSettings(false)}
+            workspaceId={workspaceId}
+          />
+        )}
+
+        {/* Job Settings Dialog */}
+        <JobSettingsDialog
+          open={showJobSettings}
+          onClose={() => setShowJobSettings(false)}
+        />
+
+        {/* Sales Settings Dialog */}
+        <SalesSettingsDialog
+          open={showSalesSettings}
+          onClose={() => setShowSalesSettings(false)}
+        />
+
+        {/* Status Manager Dialog */}
+        {showStatusManager && (
+          <StatusManager
+            open={!!showStatusManager}
+            onClose={() => setShowStatusManager(null)}
+            listId={showStatusManager}
+            workspace={workspace}
+            onUpdateWorkspace={updateWorkspace}
+          />
+        )}
+
+        {/* Permission Manager Dialog */}
+        {showPermissionManager && (
+          <PermissionManager
+            open={!!showPermissionManager}
+            onClose={() => setShowPermissionManager(null)}
+            targetId={showPermissionManager.id}
+            targetType={showPermissionManager.type}
+            workspace={workspace}
+            onUpdateWorkspace={updateWorkspace}
+          />
+        )}
+
+        {/* Activity Monitor Dialog */}
+        <ActivityMonitor
+          open={showActivityMonitor}
+          onClose={() => setShowActivityMonitor(false)}
+          workspace={workspace}
+        />
+
+        {/* WhatsApp Logs Dialog */}
+        <WhatsAppLogsDialog
+          open={showWhatsAppLogs}
+          onClose={() => setShowWhatsAppLogs(false)}
+        />
+
+        {/* Global Search Modal */}
+        <GlobalSearchModal
+          open={showSearch}
+          onClose={() => setShowSearch(false)}
+          workspace={workspace}
+          onOpenTask={(task) => { handleOpenTask(task); setShowSearch(false); }}
+        />
+
+        {/* Quote Creation — uses the same full QuotationCreationPage as Sales & Invoicing */}
+        {showQuoteDialog && quoteTask && (
+          <QuotationCreationPage
+            fromTask={editingQuotationForTask ? undefined : quoteTask}
+            editingQuotation={editingQuotationForTask || undefined}
+            fieldMapping={fieldMapping}
+            customFields={workspace.customFields}
+            onClose={() => {
+              setShowQuoteDialog(false);
+              setQuoteTask(null);
+              setEditingQuotationForTask(null);
+            }}
+            onSaved={(info) => {
+              setShowQuoteDialog(false);
+              setEditingQuotationForTask(null);
+              // Link quotation to the task and log activity
+              if (info?.fromTaskId) {
+                const currentWs = workspaceRef.current;
+                const task = currentWs.tasks.find(t => t.id === info.fromTaskId);
+                if (task) {
+                  const activityEntry: TaskComment = {
+                    id: `activity_${Date.now()}`,
+                    text: `📄 Quotation ${info.quotationNumber} ${info.id === task.linkedQuotationId ? 'updated' : 'created'} for this job`,
+                    author: 'System',
+                    createdAt: new Date().toISOString(),
+                  };
+                  const updatedTask: Task = {
+                    ...task,
+                    linkedQuotationId: info.id,
+                    comments: [...(task.comments || []), activityEntry],
+                  };
+                  const updatedWs = {
+                    ...currentWs,
+                    tasks: currentWs.tasks.map(t => t.id === info.fromTaskId ? updatedTask : t),
+                  };
+                  updateWorkspace(updatedWs);
+                  if (selectedTask?.id === info.fromTaskId) setSelectedTask(updatedTask);
+                }
+              }
+              setQuoteTask(null);
+            }}
+          />
+        )}
+
+        {/* Invoice Creation from Task */}
+        {showInvoiceFromTask && invoiceTask && (
+          <InvoiceCreationPage
+            onClose={() => {
+              setShowInvoiceFromTask(false);
+              setInvoiceTask(null);
+            }}
+            fromTask={invoiceTask}
+            fieldMapping={fieldMapping}
+            customFields={workspace.customFields}
+          />
+        )}
+
+        {/* Field Mapper Dialog */}
+        <FieldMapperDialog
+          open={showFieldMapper}
+          onClose={() => { setShowFieldMapper(false); if (workspaceId) loadFieldMapping(workspaceId).then(setFieldMapping); }}
+          customFields={workspace.customFields}
+        />
+
+        {/* Task Recovery Panel */}
+        {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
+        {showTaskRecovery && (
+          <TaskRecoveryPanel
+            workspace={workspace}
+            workspaceId={workspaceId!}
+            onUpdateTask={handleUpdateTask}
+            onBatchUpdateTasks={handleBatchUpdateTasks}
+            onClose={() => setShowTaskRecovery(false)}
+          />
+        )}
+
+        {/* Mobile Floating Action Button (FAB) */}
+        {isMobile && selectedListId && !showFormsPanel && !showAccountsPage && (
+          <Button
+            onClick={() => { setCreateTaskStatus(undefined); setShowCreateTask(true); }}
+            className="fixed bottom-safe right-6 h-14 w-14 rounded-full shadow-lg z-40 bg-primary hover:bg-primary/90"
+            size="icon"
+          >
+            <Plus className="h-6 w-6" />
+          </Button>
+        )}
+
+        {/* iKhokha Deposit Payment Banner */}
+        {pendingPaylink && (
+          <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-4 rounded-2xl border border-green-400 bg-green-600 px-6 py-4 shadow-2xl text-white max-w-sm w-full mx-4 animate-in slide-in-from-bottom-4">
+            <CreditCard className="h-8 w-8 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium opacity-80">Deposit ready — {pendingPaylink.jobNumber}</p>
+              <p className="text-xl font-bold leading-tight">R{pendingPaylink.amountRands.toFixed(2)}</p>
+            </div>
+            <button
+              onClick={() => {
+                window.open(pendingPaylink.paylinkUrl, '_blank', 'noopener');
+                setPendingPaylink(null);
+              }}
+              className="rounded-xl bg-white text-green-700 font-bold px-4 py-2 text-sm hover:bg-green-50 transition-colors shrink-0"
+            >
+              Tap to Pay
+            </button>
+            <button
+              onClick={() => setPendingPaylink(null)}
+              className="ml-1 opacity-70 hover:opacity-100 transition-opacity shrink-0"
+              title="Dismiss"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+      </div>
+    </SidebarProvider>
+  );
+}

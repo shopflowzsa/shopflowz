@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Environment variables — never commit
+.env
+.env.local
+.env.production
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Mobile
+android/
+ios/
+
+# Firebase
+.firebase/
+.firebaserc
+firebase.json
+
+# Scripts / migration one-offs
+*.mjs
+*.sh
+*.py
+check-*.js
+backfill-*.js
+audit-*.js
+apply-*.js
+test-*.js
+test.txt
+url
+
+# Data dumps / temp files
+all-recovered-data.json
+analytics-result.txt
+*.pdf
+azams notes/
+
+# Claude AI settings
+.claude/
+
+# Lock files (keep package-lock.json only)
+bun.lock
+bun.lockb

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SRClickup – Download App</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #f1f5f9;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 20px;
+      padding: 40px 32px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+      box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+    }
+    .logo {
+      width: 64px; height: 64px;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 32px; margin: 0 auto 20px;
+    }
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .version { font-size: 13px; color: #64748b; margin-bottom: 28px; }
+    .qr-wrap {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 16px;
+      display: inline-block;
+      margin-bottom: 28px;
+    }
+    .qr-wrap img { display: block; border-radius: 8px; }
+    .hint { font-size: 13px; color: #94a3b8; margin-bottom: 28px; line-height: 1.5; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 10px;
+      background: linear-gradient(135deg, #f97316, #ea580c);
+      color: white; text-decoration: none;
+      font-size: 16px; font-weight: 600;
+      padding: 14px 32px; border-radius: 12px;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn svg { width: 20px; height: 20px; }
+    .steps {
+      margin-top: 28px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 16px 20px;
+      text-align: left;
+    }
+    .steps h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #64748b; margin-bottom: 12px; }
+    .steps ol { padding-left: 18px; }
+    .steps li { font-size: 13px; color: #94a3b8; margin-bottom: 6px; line-height: 1.5; }
+    .steps li strong { color: #e2e8f0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">🔧</div>
+    <h1>SRClickup</h1>
+    <div class="version">Android App · Latest Build</div>
+
+    <div class="qr-wrap">
+      <img
+        src="https://api.qrserver.com/v1/create-qr-code/?data=https%3A%2F%2Fpezaxnrmpnxfbqqcfdpg.supabase.co%2Fstorage%2Fv1%2Fobject%2Fpublic%2Fexpense-slips%2Fapks%2Fsrclickup-v-final.apk&size=240x240&margin=0&color=0f172a"
+        alt="QR code to download SRClickup APK"
+        width="240" height="240"
+      />
+    </div>
+
+    <p class="hint">Scan the QR code with your Android phone<br>or tap the button below to download</p>
+
+    <a class="btn" href="https://pezaxnrmpnxfbqqcfdpg.supabase.co/storage/v1/object/public/expense-slips/apks/srclickup-v-final.apk" download="srclickup-v-final.apk">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Download APK
+    </a>
+
+    <div class="steps">
+      <h3>Install Instructions</h3>
+      <ol>
+        <li>Download the APK to your phone</li>
+        <li>Open the downloaded file</li>
+        <li>If prompted, allow <strong>Install unknown apps</strong></li>
+        <li>Tap <strong>Install</strong> and open the app</li>
+      </ol>
+    </div>
+  </div>
+</body>
+</html>

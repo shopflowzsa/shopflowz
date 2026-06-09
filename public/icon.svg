@@ -1,0 +1,18 @@
+<!-- Simple SVG icon that will be converted to PNG -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="80" fill="#1e293b"/>
+  
+  <!-- Tool icon -->
+  <g transform="translate(128, 128)">
+    <!-- Wrench -->
+    <path d="M200 80 L200 120 L240 120 L240 200 L200 200 L200 240 L160 240 L160 200 L80 200 L80 160 L160 160 L160 120 L120 120 L120 80 Z" fill="#3b82f6"/>
+    
+    <!-- Highlight -->
+    <rect x="160" y="80" width="40" height="40" fill="#60a5fa"/>
+    <rect x="80" y="160" width="40" height="40" fill="#60a5fa"/>
+  </g>
+  
+  <!-- Brand text "SR" -->
+  <text x="256" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="120" font-weight="bold" text-anchor="middle" fill="#ffffff">SR</text>
+</svg>
