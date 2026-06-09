@@ -9,7 +9,7 @@ export function MobileDownloadDialog() {
   const [open, setOpen] = useState(false);
   const [qrError, setQrError] = useState(false);
   const [qrService, setQrService] = useState(0); // 0 = qrserver.com, 1 = quickchart.io
-  const apkUrl = `${SUPABASE_URL}/storage/v1/object/public/expense-slips/apks/shopflowz-v-final.apk`;
+  const apkUrl = `https://github.com/shopflowzsa/shopflowz/releases/download/v1.0/shopflowz.apk`;
   const appUrl = "https://shopflowz.web.app";
   
   // Multiple QR code services for fallback
