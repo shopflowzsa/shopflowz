@@ -427,16 +427,16 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
 
     const w = window.open("", "_blank", "width=900,height=700");
     if (!w) return;
-    w.document.write(`<!DOCTYPE html>
-<html><head>
-  <title>Barcode Labels${cfg.printerName ? ` — ${cfg.printerName}` : ""}</title>
-  <style>
-    @page { size: ${pageWidth}mm ${pageHeight}mm; margin: ${marginTop}mm ${marginRight}mm ${marginBottom}mm ${marginLeft}mm; }
+
+    // For thermal roll (single column), each label gets its own page so the
+    // printer feeds exactly one label per cut/gap. For sheet layouts (multi-column)
+    // we keep the grid approach so labels stay on the same sheet.
+    const isThermalRoll = columns === 1 && pageWidth <= 80;
+
+    const sharedStyles = `
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Arial, sans-serif; }
-    ${cfg.printerName ? `.printer-note { font-size: 8pt; color: #aaa; margin-bottom: 3mm; }` : ""}
-    .grid { display: grid; grid-template-columns: repeat(${columns}, ${scaledLabelW}mm); grid-auto-rows: ${scaledLabelH}mm; gap: ${gapV}mm ${gapH}mm; }
-    .label { width: ${scaledLabelW}mm; height: ${scaledLabelH}mm; max-height: ${scaledLabelH}mm; overflow: hidden; position: relative; page-break-inside: avoid; }
+    .label { width: ${scaledLabelW}mm; height: ${scaledLabelH}mm; max-height: ${scaledLabelH}mm; overflow: hidden; position: relative; }
     .bg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.15; }
     .lbl-inner { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 0.4mm 0.8mm; gap: 0.1mm; overflow: hidden; }
     .lbl-name { font-size: ${Math.max(4, scaledLabelH * 0.22 * fontScale).toFixed(1)}pt; font-weight: bold; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.15; }
@@ -444,14 +444,64 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     .lbl-bc { max-width: 100%; max-height: ${Math.round(scaledLabelH * 0.95 * barcodeScale)}px; object-fit: contain; display: block; }
     .lbl-price { font-size: ${Math.max(4, scaledLabelH * 0.22 * fontScale).toFixed(1)}pt; font-weight: bold; line-height: 1.15; }
     .lbl-cat { font-size: ${Math.max(3, scaledLabelH * 0.15 * fontScale).toFixed(1)}pt; color: #777; line-height: 1.15; }
-    .no-bc { font-size: ${Math.max(3, scaledLabelH * 0.17 * fontScale).toFixed(1)}pt; color: #aaa; }
+    .no-bc { font-size: ${Math.max(3, scaledLabelH * 0.17 * fontScale).toFixed(1)}pt; color: #aaa; }`;
+
+    let htmlContent: string;
+    if (isThermalRoll) {
+      // Each label is its own @page — printer feeds exactly one label per job
+      const labelPages = itemsToPrint.map((item) => {
+        const bcH = Math.min(barcodeHeight, Math.round(scaledLabelH * 0.55 * barcodeScale));
+        const bcFontSize = Math.max(4, Math.round(scaledLabelH * 0.22 * fontScale));
+        let barcodeImg = "";
+        if (item.barcode && showBarcode) {
+          const canvas = document.createElement("canvas");
+          try {
+            JsBarcode(canvas, item.barcode, { format: "CODE128", width: 1, height: bcH, displayValue: true, fontSize: bcFontSize, margin: 1 });
+            barcodeImg = canvas.toDataURL("image/png");
+          } catch (_e) {}
+        }
+        return `<div class="label page-label">
+          ${cfg.backgroundImageBase64 ? `<img class="bg-img" src="${cfg.backgroundImageBase64}" />` : ""}
+          <div class="lbl-inner">
+            ${showName ? `<div class="lbl-name">${item.name}</div>` : ""}
+            ${showSku && item.sku ? `<div class="lbl-sku">${item.sku}</div>` : ""}
+            ${barcodeImg ? `<img class="lbl-bc" src="${barcodeImg}" />` : (showBarcode ? '<div class="no-bc">No barcode</div>' : "")}
+            ${showPrice && item.price ? `<div class="lbl-price">R${item.price.toFixed(2)}</div>` : ""}
+            ${showCategory && item.category ? `<div class="lbl-cat">${item.category}</div>` : ""}
+          </div>
+        </div>`;
+      }).join("");
+      htmlContent = `<!DOCTYPE html>
+<html><head>
+  <title>Barcode Labels</title>
+  <style>
+    @page { size: ${pageWidth}mm ${pageHeight}mm; margin: ${marginTop}mm ${marginRight}mm ${marginBottom}mm ${marginLeft}mm; }
+    ${sharedStyles}
+    .page-label { page-break-after: always; }
+    .page-label:last-child { page-break-after: avoid; }
+    @media print { body { margin: 0; } }
+  </style>
+</head><body>${labelPages}</body></html>`;
+    } else {
+      // Sheet layout — keep grid, multiple labels per page
+      htmlContent = `<!DOCTYPE html>
+<html><head>
+  <title>Barcode Labels${cfg.printerName ? ` — ${cfg.printerName}` : ""}</title>
+  <style>
+    @page { size: ${pageWidth}mm ${pageHeight}mm; margin: ${marginTop}mm ${marginRight}mm ${marginBottom}mm ${marginLeft}mm; }
+    ${sharedStyles}
+    ${cfg.printerName ? `.printer-note { font-size: 8pt; color: #aaa; margin-bottom: 3mm; }` : ""}
+    .grid { display: grid; grid-template-columns: repeat(${columns}, ${scaledLabelW}mm); grid-auto-rows: ${scaledLabelH}mm; gap: ${gapV}mm ${gapH}mm; }
+    .label { page-break-inside: avoid; }
     @media print { body { margin: 0; } }
   </style>
 </head><body>
   ${cfg.printerName ? `<div class="printer-note">Print on: ${cfg.printerName}</div>` : ""}
   <div class="grid">${spacerHtml}${labelsHtml}</div>
-  <script>window.onload = function() { window.print(); }<\/script>
-</body></html>`);
+</body></html>`;
+    }
+
+    w.document.write(htmlContent);
     w.document.close();
   }
 
