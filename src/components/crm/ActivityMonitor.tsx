@@ -203,7 +203,7 @@ export function ActivityMonitor({ open, onClose, workspace }: ActivityMonitorPro
     if (!open || !workspaceId) return;
 
     fetchEntries(true);
-    const pollInterval = setInterval(() => fetchEntries(false), 3000);
+    const pollInterval = setInterval(() => fetchEntries(false), 60_000);
 
     const channel = supabase
       .channel(`task_audit_${workspaceId}_${loadCount}`)

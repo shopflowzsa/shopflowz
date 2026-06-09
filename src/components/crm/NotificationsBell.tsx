@@ -6,7 +6,7 @@ import { getNotifications, markAllNotificationsRead, clearNotifications, type Ap
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
-const POLL_MS = 45_000;
+const POLL_MS = 120_000;
 
 function timeAgo(iso: string): string {
   const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));

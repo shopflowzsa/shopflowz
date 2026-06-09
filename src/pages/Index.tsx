@@ -1401,7 +1401,7 @@ export default function Index() {
         .catch(err => console.error('[FormPoll] Failed to check pending submissions:', err));
     };
     pollPendingSubmissions();
-    const formPollInterval = setInterval(pollPendingSubmissions, 3000);
+    const formPollInterval = setInterval(pollPendingSubmissions, 5 * 60_000);
 
     const unsubscribe = subscribeFormSubmissions(workspaceId, handleSubmission);
     return () => {

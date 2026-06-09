@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { getEcommerceNotifications, markAllEcommerceNotificationsRead, clearEcommerceNotifications, type AppNotification } from "@/lib/notificationService";
 import { cn } from "@/lib/utils";
 
-const POLL_MS = 30_000;
+const POLL_MS = 120_000;
 
 function timeAgo(iso: string): string {
   const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));

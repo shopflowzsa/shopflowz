@@ -1,11 +1,11 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'com.speakerrepairs.srclickup',
-  appName: 'SRClickUp',
+  appId: 'com.shopflowz.app',
+  appName: 'ShopFlowz',
   webDir: 'dist',
   server: {
-    url: 'https://srclickup.web.app',
+    url: 'https://srcomponents.co.za',
     androidScheme: 'https',
     cleartext: false,
   },
