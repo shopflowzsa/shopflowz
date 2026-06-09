@@ -114,6 +114,11 @@ export const LABEL_TEMPLATES: { id: string; name: string; config: LabelTemplateC
     config: { columns: 1, rows: 1, labelW: 72, labelH: 40, marginTop: 2, marginBottom: 2, marginLeft: 2, marginRight: 2, gapH: 0, gapV: 2, pageWidth: 80, pageHeight: 50 },
   },
   {
+    id: "thermal_40x30",
+    name: "Thermal printer – 40×30mm sticker",
+    config: { columns: 1, rows: 1, labelW: 36, labelH: 26, marginTop: 2, marginBottom: 2, marginLeft: 2, marginRight: 2, gapH: 0, gapV: 0, pageWidth: 40, pageHeight: 30 },
+  },
+  {
     id: "custom",
     name: "Custom / Upload template",
     config: { columns: 2, rows: 5, labelW: 90, labelH: 50, marginTop: 12, marginBottom: 12, marginLeft: 10, marginRight: 10, gapH: 5, gapV: 3, pageWidth: 210, pageHeight: 297 },
