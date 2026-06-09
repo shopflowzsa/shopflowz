@@ -99,7 +99,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
 
   // Per-template alignment adjustments (saved to localStorage)
   const ALIGN_KEY = "inventory_label_align";
-  type AlignState = { offX: number; offY: number; scale: number; labelW?: number; labelH?: number };
+  type AlignState = { offX: number; offY: number; scale: number; labelW?: number; labelH?: number; fontScale?: number; barcodeScale?: number };
   const loadAlign = (): Record<string, AlignState> => {
     try { return JSON.parse(localStorage.getItem(ALIGN_KEY) || "{}"); } catch { return {}; }
   };
@@ -385,6 +385,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     const marginRight = tmpl.marginRight - align.offX;
     const scaledLabelW = +(baseLabelW * align.scale).toFixed(2);
     const scaledLabelH = +(baseLabelH * align.scale).toFixed(2);
+    const fontScale = align.fontScale ?? 1;
+    const barcodeScale = align.barcodeScale ?? 1;
     const { showName, showSku, showBarcode, showPrice, showCategory, barcodeHeight } = cfg.content;
 
     const spacerHtml = Array.from({ length: Math.max(0, startAt - 1) }, () =>
@@ -393,8 +395,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
 
     const labelsHtml = itemsToPrint.map((item) => {
       // Scale barcode to the label height — bars + text must fit within the label
-      const bcH = Math.min(barcodeHeight, Math.round(scaledLabelH * 0.55));
-      const bcFontSize = Math.max(4, Math.round(scaledLabelH * 0.22));
+      const bcH = Math.min(barcodeHeight, Math.round(scaledLabelH * 0.55 * barcodeScale));
+      const bcFontSize = Math.max(4, Math.round(scaledLabelH * 0.22 * fontScale));
       let barcodeImg = "";
       if (item.barcode && showBarcode) {
         const canvas = document.createElement("canvas");
@@ -437,12 +439,12 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     .label { width: ${scaledLabelW}mm; height: ${scaledLabelH}mm; max-height: ${scaledLabelH}mm; overflow: hidden; position: relative; page-break-inside: avoid; }
     .bg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.15; }
     .lbl-inner { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 0.4mm 0.8mm; gap: 0.1mm; overflow: hidden; }
-    .lbl-name { font-size: ${Math.max(4, Math.min(6.5, scaledLabelH * 0.22)).toFixed(1)}pt; font-weight: bold; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.15; }
-    .lbl-sku { font-size: ${Math.max(3, Math.min(5.5, scaledLabelH * 0.17)).toFixed(1)}pt; color: #555; font-family: monospace; line-height: 1.15; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .lbl-bc { max-width: 100%; max-height: ${Math.round(scaledLabelH * 0.95)}px; object-fit: contain; display: block; }
-    .lbl-price { font-size: ${Math.max(4, Math.min(6.5, scaledLabelH * 0.22)).toFixed(1)}pt; font-weight: bold; line-height: 1.15; }
-    .lbl-cat { font-size: ${Math.max(3, Math.min(5, scaledLabelH * 0.15)).toFixed(1)}pt; color: #777; line-height: 1.15; }
-    .no-bc { font-size: ${Math.max(3, Math.min(5.5, scaledLabelH * 0.17)).toFixed(1)}pt; color: #aaa; }
+    .lbl-name { font-size: ${Math.max(4, scaledLabelH * 0.22 * fontScale).toFixed(1)}pt; font-weight: bold; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.15; }
+    .lbl-sku { font-size: ${Math.max(3, scaledLabelH * 0.17 * fontScale).toFixed(1)}pt; color: #555; font-family: monospace; line-height: 1.15; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .lbl-bc { max-width: 100%; max-height: ${Math.round(scaledLabelH * 0.95 * barcodeScale)}px; object-fit: contain; display: block; }
+    .lbl-price { font-size: ${Math.max(4, scaledLabelH * 0.22 * fontScale).toFixed(1)}pt; font-weight: bold; line-height: 1.15; }
+    .lbl-cat { font-size: ${Math.max(3, scaledLabelH * 0.15 * fontScale).toFixed(1)}pt; color: #777; line-height: 1.15; }
+    .no-bc { font-size: ${Math.max(3, scaledLabelH * 0.17 * fontScale).toFixed(1)}pt; color: #aaa; }
     @media print { body { margin: 0; } }
   </style>
 </head><body>
@@ -1907,13 +1909,31 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                       </div>
                     </div>
 
-                    {/* Reset */}
-                    <button className="border rounded px-3 py-1 text-sm hover:bg-muted text-center" onClick={() => updateAlign({ offX: 0, offY: 0, scale: 1, labelW: undefined, labelH: undefined })}>↺ Reset all</button>
-
-                    {/* Offset display */}
-                    <div className="text-xs text-muted-foreground text-center">
-                      Pos: X {align.offX > 0 ? '+' : ''}{align.offX}mm, Y {align.offY > 0 ? '+' : ''}{align.offY}mm
+                    {/* Font size */}
+                    <div className="flex flex-col gap-1">
+                      <div className="text-xs text-muted-foreground text-center">Text size</div>
+                      <div className="flex items-center gap-1 justify-center">
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ fontScale: +((align.fontScale ?? 1) - 0.1).toFixed(2) })}>− Smaller</button>
+                        <span className="text-xs w-10 text-center">{((align.fontScale ?? 1) * 100).toFixed(0)}%</span>
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ fontScale: +((align.fontScale ?? 1) + 0.1).toFixed(2) })}>+ Bigger</button>
+                      </div>
                     </div>
+
+                    {/* Barcode size */}
+                    <div className="flex flex-col gap-1">
+                      <div className="text-xs text-muted-foreground text-center">Barcode size</div>
+                      <div className="flex items-center gap-1 justify-center">
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ barcodeScale: +((align.barcodeScale ?? 1) - 0.1).toFixed(2) })}>− Smaller</button>
+                        <span className="text-xs w-10 text-center">{((align.barcodeScale ?? 1) * 100).toFixed(0)}%</span>
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ barcodeScale: +((align.barcodeScale ?? 1) + 0.1).toFixed(2) })}>+ Bigger</button>
+                      </div>
+                    </div>
+
+                    {/* Reset */}
+                    <button className="border rounded px-3 py-1 text-sm hover:bg-muted text-center" onClick={() => updateAlign({ offX: 0, offY: 0, scale: 1, labelW: undefined, labelH: undefined, fontScale: 1, barcodeScale: 1 })}>↺ Reset all</button>
+
+                    {/* Saved indicator */}
+                    <div className="text-xs text-green-600 text-center font-medium">✓ Settings auto-saved</div>
 
                     {/* Test print */}
                     <Button
