@@ -97,6 +97,25 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
   const [generatingBarcodes, setGeneratingBarcodes] = useState(false);
   const [barcodeCopies, setBarcodeCopies] = useState<Record<string, number>>({});
 
+  // Per-template alignment adjustments (saved to localStorage)
+  const ALIGN_KEY = "inventory_label_align";
+  const loadAlign = (): Record<string, { offX: number; offY: number; scale: number }> => {
+    try { return JSON.parse(localStorage.getItem(ALIGN_KEY) || "{}"); } catch { return {}; }
+  };
+  const [labelAlign, setLabelAlign] = useState<Record<string, { offX: number; offY: number; scale: number }>>(loadAlign);
+  const [showAlignPreview, setShowAlignPreview] = useState(false);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  const currentAlign = labelAlign[barcodeLabelTemplateId] ?? { offX: 0, offY: 0, scale: 1 };
+
+  function updateAlign(patch: Partial<{ offX: number; offY: number; scale: number }>) {
+    setLabelAlign((prev) => {
+      const next = { ...prev, [barcodeLabelTemplateId]: { ...currentAlign, ...patch } };
+      localStorage.setItem(ALIGN_KEY, JSON.stringify(next));
+      return next;
+    });
+  }
+
   const [searchInput, setSearchInput] = useState(""); // what the user types (instant)
   const [searchTerm, setSearchTerm] = useState("");   // what the filter uses (debounced)
   useEffect(() => {
@@ -355,7 +374,14 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
         ? cfg.customTemplate
         : LABEL_TEMPLATES.find((t) => t.id === templateId)?.config ?? DEFAULT_PRINTER_CONFIG.customTemplate;
 
-    const { columns, labelW, labelH, marginTop, marginBottom, marginLeft, marginRight, gapH, gapV, pageWidth, pageHeight } = tmpl;
+    const align = (loadAlign()[templateId]) ?? { offX: 0, offY: 0, scale: 1 };
+    const { columns, labelW, labelH, gapH, gapV, pageWidth, pageHeight } = tmpl;
+    const marginTop = tmpl.marginTop + align.offY;
+    const marginLeft = tmpl.marginLeft + align.offX;
+    const marginBottom = tmpl.marginBottom - align.offY;
+    const marginRight = tmpl.marginRight - align.offX;
+    const scaledLabelW = +(labelW * align.scale).toFixed(2);
+    const scaledLabelH = +(labelH * align.scale).toFixed(2);
     const { showName, showSku, showBarcode, showPrice, showCategory, barcodeHeight } = cfg.content;
 
     const spacerHtml = Array.from({ length: Math.max(0, startAt - 1) }, () =>
@@ -364,8 +390,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
 
     const labelsHtml = itemsToPrint.map((item) => {
       // Scale barcode to the label height — bars + text must fit within the label
-      const bcH = Math.min(barcodeHeight, Math.round(labelH * 0.55));
-      const bcFontSize = Math.max(4, Math.round(labelH * 0.22));
+      const bcH = Math.min(barcodeHeight, Math.round(scaledLabelH * 0.55));
+      const bcFontSize = Math.max(4, Math.round(scaledLabelH * 0.22));
       let barcodeImg = "";
       if (item.barcode && showBarcode) {
         const canvas = document.createElement("canvas");
@@ -404,16 +430,16 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Arial, sans-serif; }
     ${cfg.printerName ? `.printer-note { font-size: 8pt; color: #aaa; margin-bottom: 3mm; }` : ""}
-    .grid { display: grid; grid-template-columns: repeat(${columns}, ${labelW}mm); grid-auto-rows: ${labelH}mm; gap: ${gapV}mm ${gapH}mm; }
-    .label { width: ${labelW}mm; height: ${labelH}mm; max-height: ${labelH}mm; overflow: hidden; position: relative; page-break-inside: avoid; }
+    .grid { display: grid; grid-template-columns: repeat(${columns}, ${scaledLabelW}mm); grid-auto-rows: ${scaledLabelH}mm; gap: ${gapV}mm ${gapH}mm; }
+    .label { width: ${scaledLabelW}mm; height: ${scaledLabelH}mm; max-height: ${scaledLabelH}mm; overflow: hidden; position: relative; page-break-inside: avoid; }
     .bg-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0.15; }
     .lbl-inner { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; height: 100%; padding: 0.4mm 0.8mm; gap: 0.1mm; overflow: hidden; }
-    .lbl-name { font-size: ${Math.max(4, Math.min(6.5, labelH * 0.22)).toFixed(1)}pt; font-weight: bold; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.15; }
-    .lbl-sku { font-size: ${Math.max(3, Math.min(5.5, labelH * 0.17)).toFixed(1)}pt; color: #555; font-family: monospace; line-height: 1.15; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-    .lbl-bc { max-width: 100%; max-height: ${Math.round(labelH * 0.95)}px; object-fit: contain; display: block; }
-    .lbl-price { font-size: ${Math.max(4, Math.min(6.5, labelH * 0.22)).toFixed(1)}pt; font-weight: bold; line-height: 1.15; }
-    .lbl-cat { font-size: ${Math.max(3, Math.min(5, labelH * 0.15)).toFixed(1)}pt; color: #777; line-height: 1.15; }
-    .no-bc { font-size: ${Math.max(3, Math.min(5.5, labelH * 0.17)).toFixed(1)}pt; color: #aaa; }
+    .lbl-name { font-size: ${Math.max(4, Math.min(6.5, scaledLabelH * 0.22)).toFixed(1)}pt; font-weight: bold; text-align: center; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; line-height: 1.15; }
+    .lbl-sku { font-size: ${Math.max(3, Math.min(5.5, scaledLabelH * 0.17)).toFixed(1)}pt; color: #555; font-family: monospace; line-height: 1.15; max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .lbl-bc { max-width: 100%; max-height: ${Math.round(scaledLabelH * 0.95)}px; object-fit: contain; display: block; }
+    .lbl-price { font-size: ${Math.max(4, Math.min(6.5, scaledLabelH * 0.22)).toFixed(1)}pt; font-weight: bold; line-height: 1.15; }
+    .lbl-cat { font-size: ${Math.max(3, Math.min(5, scaledLabelH * 0.15)).toFixed(1)}pt; color: #777; line-height: 1.15; }
+    .no-bc { font-size: ${Math.max(3, Math.min(5.5, scaledLabelH * 0.17)).toFixed(1)}pt; color: #aaa; }
     @media print { body { margin: 0; } }
   </style>
 </head><body>
@@ -1729,6 +1755,13 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
               >
                 {generatingBarcodes ? "Generating…" : "⚡ Generate All Missing"}
               </Button>
+              <Button
+                variant={showAlignPreview ? "default" : "outline"}
+                size="sm"
+                onClick={() => setShowAlignPreview((v) => !v)}
+              >
+                🎯 Align
+              </Button>
               {/* Template + start position picker */}
               {(() => {
                 const tmpl = barcodeLabelTemplateId === "custom"
@@ -1792,6 +1825,96 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                 🖨️ Print Selected ({selectedBarcodeItems.size})
               </Button>
             </div>
+
+            {/* Alignment panel */}
+            {showAlignPreview && (() => {
+              const tmpl = barcodeLabelTemplateId === "custom"
+                ? printerConfig.customTemplate
+                : (LABEL_TEMPLATES.find((t) => t.id === barcodeLabelTemplateId)?.config ?? DEFAULT_PRINTER_CONFIG.customTemplate);
+              const align = currentAlign;
+              const previewScale = 3; // px per mm
+              const pw = tmpl.pageWidth * previewScale;
+              const ph = tmpl.pageHeight * previewScale;
+              const lw = tmpl.labelW * align.scale * previewScale;
+              const lh = tmpl.labelH * align.scale * previewScale;
+              const mt = (tmpl.marginTop + align.offY) * previewScale;
+              const ml = (tmpl.marginLeft + align.offX) * previewScale;
+              const sampleItem = [...selectedBarcodeItems].length > 0
+                ? items.find((i) => selectedBarcodeItems.has(i.id))
+                : items.find((i) => i.barcode);
+              return (
+                <div className="border rounded-lg p-4 bg-muted/30 mb-3 flex flex-wrap gap-6 items-start">
+                  {/* Live preview */}
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="text-xs font-medium text-muted-foreground mb-1">Preview</div>
+                    <div
+                      className="relative border-2 border-dashed border-gray-300 bg-white"
+                      style={{ width: pw, height: ph, minWidth: pw, minHeight: ph }}
+                    >
+                      <div
+                        className="absolute border border-gray-800 bg-white overflow-hidden flex flex-col items-center justify-center text-center"
+                        style={{ left: ml, top: mt, width: lw, height: lh, fontSize: Math.max(4, lh * 0.12) }}
+                      >
+                        {sampleItem ? (
+                          <>
+                            {printerConfig.content.showName && <div style={{ fontSize: Math.max(4, lh * 0.14), fontWeight: 'bold', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100%', padding: '0 2px' }}>{sampleItem.name}</div>}
+                            {printerConfig.content.showSku && sampleItem.sku && <div style={{ fontSize: Math.max(3, lh * 0.11), color: '#555', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100%' }}>{sampleItem.sku}</div>}
+                            <div style={{ fontSize: Math.max(3, lh * 0.1), color: '#999', border: '1px solid #ccc', padding: '1px 4px', margin: '1px 0' }}>▮▯▮▯▮▮▯▮</div>
+                            {printerConfig.content.showPrice && sampleItem.price && <div style={{ fontSize: Math.max(3, lh * 0.13), fontWeight: 'bold' }}>R{sampleItem.price.toFixed(2)}</div>}
+                          </>
+                        ) : (
+                          <div style={{ color: '#aaa', fontSize: 8 }}>Sample</div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground">{tmpl.pageWidth}×{tmpl.pageHeight}mm page</div>
+                  </div>
+
+                  {/* Controls */}
+                  <div className="flex flex-col gap-3">
+                    <div className="text-xs font-medium text-muted-foreground">Adjust for this template</div>
+
+                    {/* Up/Down/Left/Right */}
+                    <div className="flex flex-col items-center gap-1">
+                      <div className="text-xs text-muted-foreground">Position</div>
+                      <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offY: +(align.offY - 0.5).toFixed(1) })}>▲ Up</button>
+                      <div className="flex gap-1">
+                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offX: +(align.offX - 0.5).toFixed(1) })}>◀ Left</button>
+                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offX: 0, offY: 0, scale: 1 })}>Reset</button>
+                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offX: +(align.offX + 0.5).toFixed(1) })}>Right ▶</button>
+                      </div>
+                      <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offY: +(align.offY + 0.5).toFixed(1) })}>▼ Down</button>
+                    </div>
+
+                    {/* Size */}
+                    <div className="flex flex-col items-center gap-1">
+                      <div className="text-xs text-muted-foreground">Size (scale: {align.scale.toFixed(2)}×)</div>
+                      <div className="flex gap-2">
+                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ scale: Math.max(0.5, +(align.scale - 0.05).toFixed(2)) })}>− Smaller</button>
+                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ scale: Math.min(2, +(align.scale + 0.05).toFixed(2)) })}>+ Bigger</button>
+                      </div>
+                    </div>
+
+                    {/* Offset display */}
+                    <div className="text-xs text-muted-foreground text-center">
+                      Offset: X {align.offX > 0 ? '+' : ''}{align.offX}mm, Y {align.offY > 0 ? '+' : ''}{align.offY}mm
+                    </div>
+
+                    {/* Test print */}
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const sample = sampleItem ?? items.find((i) => i.barcode);
+                        if (sample) printBarcodeLabels([sample]);
+                      }}
+                    >
+                      🖨️ Test Print
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Select-all row */}
             <div className="flex items-center gap-2 mb-2 text-sm text-muted-foreground">
