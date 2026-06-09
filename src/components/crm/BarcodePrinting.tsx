@@ -119,6 +119,19 @@ const predefinedTemplates: Record<string, LabelTemplate> = {
     marginLeft: 10,
     gapX: 2.5,
     gapY: 2.5
+  },
+  "thermal_40x30": {
+    id: "thermal_40x30",
+    name: "Thermal printer – 40×30mm sticker",
+    labelsPerPage: 1,
+    labelWidth: 36,
+    labelHeight: 26,
+    paperWidth: 40,
+    paperHeight: 30,
+    marginTop: 2,
+    marginLeft: 2,
+    gapX: 0,
+    gapY: 0
   }
 };
 
