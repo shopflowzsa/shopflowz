@@ -99,16 +99,17 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
 
   // Per-template alignment adjustments (saved to localStorage)
   const ALIGN_KEY = "inventory_label_align";
-  const loadAlign = (): Record<string, { offX: number; offY: number; scale: number }> => {
+  type AlignState = { offX: number; offY: number; scale: number; labelW?: number; labelH?: number };
+  const loadAlign = (): Record<string, AlignState> => {
     try { return JSON.parse(localStorage.getItem(ALIGN_KEY) || "{}"); } catch { return {}; }
   };
-  const [labelAlign, setLabelAlign] = useState<Record<string, { offX: number; offY: number; scale: number }>>(loadAlign);
+  const [labelAlign, setLabelAlign] = useState<Record<string, AlignState>>(loadAlign);
   const [showAlignPreview, setShowAlignPreview] = useState(false);
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const currentAlign = labelAlign[barcodeLabelTemplateId] ?? { offX: 0, offY: 0, scale: 1 };
 
-  function updateAlign(patch: Partial<{ offX: number; offY: number; scale: number }>) {
+  function updateAlign(patch: Partial<AlignState>) {
     setLabelAlign((prev) => {
       const next = { ...prev, [barcodeLabelTemplateId]: { ...currentAlign, ...patch } };
       localStorage.setItem(ALIGN_KEY, JSON.stringify(next));
@@ -375,13 +376,15 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
         : LABEL_TEMPLATES.find((t) => t.id === templateId)?.config ?? DEFAULT_PRINTER_CONFIG.customTemplate;
 
     const align = (loadAlign()[templateId]) ?? { offX: 0, offY: 0, scale: 1 };
-    const { columns, labelW, labelH, gapH, gapV, pageWidth, pageHeight } = tmpl;
+    const { columns, gapH, gapV, pageWidth, pageHeight } = tmpl;
+    const baseLabelW = align.labelW ?? tmpl.labelW;
+    const baseLabelH = align.labelH ?? tmpl.labelH;
     const marginTop = tmpl.marginTop + align.offY;
     const marginLeft = tmpl.marginLeft + align.offX;
     const marginBottom = tmpl.marginBottom - align.offY;
     const marginRight = tmpl.marginRight - align.offX;
-    const scaledLabelW = +(labelW * align.scale).toFixed(2);
-    const scaledLabelH = +(labelH * align.scale).toFixed(2);
+    const scaledLabelW = +(baseLabelW * align.scale).toFixed(2);
+    const scaledLabelH = +(baseLabelH * align.scale).toFixed(2);
     const { showName, showSku, showBarcode, showPrice, showCategory, barcodeHeight } = cfg.content;
 
     const spacerHtml = Array.from({ length: Math.max(0, startAt - 1) }, () =>
@@ -1835,8 +1838,10 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
               const previewScale = 3; // px per mm
               const pw = tmpl.pageWidth * previewScale;
               const ph = tmpl.pageHeight * previewScale;
-              const lw = tmpl.labelW * align.scale * previewScale;
-              const lh = tmpl.labelH * align.scale * previewScale;
+              const baseLW = align.labelW ?? tmpl.labelW;
+              const baseLH = align.labelH ?? tmpl.labelH;
+              const lw = baseLW * align.scale * previewScale;
+              const lh = baseLH * align.scale * previewScale;
               const mt = (tmpl.marginTop + align.offY) * previewScale;
               const ml = (tmpl.marginLeft + align.offX) * previewScale;
               const sampleItem = [...selectedBarcodeItems].length > 0
@@ -1880,24 +1885,34 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                       <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offY: +(align.offY - 0.5).toFixed(1) })}>▲ Up</button>
                       <div className="flex gap-1">
                         <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offX: +(align.offX - 0.5).toFixed(1) })}>◀ Left</button>
-                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offX: 0, offY: 0, scale: 1 })}>Reset</button>
                         <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offX: +(align.offX + 0.5).toFixed(1) })}>Right ▶</button>
                       </div>
                       <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ offY: +(align.offY + 0.5).toFixed(1) })}>▼ Down</button>
                     </div>
 
-                    {/* Size */}
-                    <div className="flex flex-col items-center gap-1">
-                      <div className="text-xs text-muted-foreground">Size (scale: {align.scale.toFixed(2)}×)</div>
-                      <div className="flex gap-2">
-                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ scale: Math.max(0.5, +(align.scale - 0.05).toFixed(2)) })}>− Smaller</button>
-                        <button className="border rounded px-3 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ scale: Math.min(2, +(align.scale + 0.05).toFixed(2)) })}>+ Bigger</button>
+                    {/* Label size */}
+                    <div className="flex flex-col gap-1">
+                      <div className="text-xs text-muted-foreground text-center">Label size</div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs w-6">W:</span>
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ labelW: +(baseLW - 0.5).toFixed(1) })}>−</button>
+                        <span className="text-xs w-10 text-center">{baseLW.toFixed(1)}mm</span>
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ labelW: +(baseLW + 0.5).toFixed(1) })}>+</button>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs w-6">H:</span>
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ labelH: +(baseLH - 0.5).toFixed(1) })}>−</button>
+                        <span className="text-xs w-10 text-center">{baseLH.toFixed(1)}mm</span>
+                        <button className="border rounded px-2 py-1 text-sm hover:bg-muted" onClick={() => updateAlign({ labelH: +(baseLH + 0.5).toFixed(1) })}>+</button>
                       </div>
                     </div>
 
+                    {/* Reset */}
+                    <button className="border rounded px-3 py-1 text-sm hover:bg-muted text-center" onClick={() => updateAlign({ offX: 0, offY: 0, scale: 1, labelW: undefined, labelH: undefined })}>↺ Reset all</button>
+
                     {/* Offset display */}
                     <div className="text-xs text-muted-foreground text-center">
-                      Offset: X {align.offX > 0 ? '+' : ''}{align.offX}mm, Y {align.offY > 0 ? '+' : ''}{align.offY}mm
+                      Pos: X {align.offX > 0 ? '+' : ''}{align.offX}mm, Y {align.offY > 0 ? '+' : ''}{align.offY}mm
                     </div>
 
                     {/* Test print */}
