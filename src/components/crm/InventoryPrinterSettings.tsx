@@ -115,7 +115,7 @@ export const LABEL_TEMPLATES: { id: string; name: string; config: LabelTemplateC
   },
   {
     id: "thermal_40x30",
-    name: "Thermal printer – 40×30mm sticker",
+    name: "Thermal printer – 40x30mm sticker (4cm x 3cm)",
     config: { columns: 1, rows: 1, labelW: 36, labelH: 26, marginTop: 2, marginBottom: 2, marginLeft: 2, marginRight: 2, gapH: 0, gapV: 0, pageWidth: 40, pageHeight: 30 },
   },
   {
