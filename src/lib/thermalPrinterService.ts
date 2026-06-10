@@ -194,13 +194,10 @@ async function openDevice(device: USBDevice): Promise<ConnectedPrinter> {
   if (endpointOut === undefined || interfaceNumber === undefined) {
     throw new Error("Selected device doesn't expose a bulk OUT endpoint — not a compatible printer.");
   }
-  try {
-    await device.claimInterface(interfaceNumber);
-  } catch {
-    // Interface still claimed from a previous connection — release and retry.
-    try { await device.releaseInterface(interfaceNumber); } catch { /* ignore */ }
-    await device.claimInterface(interfaceNumber);
-  }
+  // Always release first — if it wasn't claimed this is a no-op, if it was
+  // claimed (stale connection) this clears it so the claim below succeeds.
+  try { await device.releaseInterface(interfaceNumber); } catch { /* not claimed — fine */ }
+  await device.claimInterface(interfaceNumber);
   return {
     device,
     endpointOut,
