@@ -470,12 +470,12 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
     // DDG needs no setup; Google needs key+cx. Open setup screen only if Google chosen but creds missing.
     if (provider === "google" && (!apiKey || !cx)) { setImgSetupMode(true); return; }
     const item = selected[0];
-    setSearchQuery(`${item.name} ${item.category || ""} product`);
+    setSearchQuery(`${item.name || item.sku || ""} ${item.category || ""} product`.trim());
     runSearch(item, provider, apiKey, cx);
   }
 
   async function runSearch(item: InventoryItem, provider: ImgProvider, apiKey: string, cx: string, customQ?: string) {
-    const q = customQ ?? `${item.name} ${item.category || ""} product photo`;
+    const q = customQ ?? `${item.name || item.sku || ""} ${item.category || ""} product photo`.trim();
     setSearchQuery(q);
     setSearchLoading(true);
     setSearchResults([]);

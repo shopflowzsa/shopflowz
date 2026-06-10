@@ -344,8 +344,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     const q = barcodeSearch.toLowerCase();
     return items.filter(
       (i) =>
-        i.name.toLowerCase().includes(q) ||
-        i.sku.toLowerCase().includes(q) ||
+        (i.name || "").toLowerCase().includes(q) ||
+        (i.sku || "").toLowerCase().includes(q) ||
         (i.barcode || "").includes(q)
     );
   }, [items, barcodeSearch]);
@@ -1823,47 +1823,54 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                   ? printerConfig.customTemplate
                   : (LABEL_TEMPLATES.find((t) => t.id === barcodeLabelTemplateId)?.config ?? DEFAULT_PRINTER_CONFIG.customTemplate);
                 const total = tmpl.columns * tmpl.rows;
+                const isThermalRoll = tmpl.columns === 1 && tmpl.pageWidth <= 80;
                 return (
                   <div className="flex items-center gap-2 flex-wrap">
                     <select
                       className="h-8 rounded border border-input bg-background px-2 text-xs"
                       value={barcodeLabelTemplateId}
                       onChange={(e) => {
+                        const newTmpl = LABEL_TEMPLATES.find((t) => t.id === e.target.value)?.config ?? printerConfig.customTemplate;
                         setBarcodeLabelTemplateId(e.target.value);
-                        setStartBarcodeLabel(1);
+                        if (newTmpl.columns === 1 && newTmpl.pageWidth <= 80) setStartBarcodeLabel(1);
+                        else setStartBarcodeLabel(1);
                       }}
                     >
                       {LABEL_TEMPLATES.map((t) => (
                         <option key={t.id} value={t.id}>{t.name}</option>
                       ))}
                     </select>
-                    <div className="text-xs text-muted-foreground whitespace-nowrap">Start at:</div>
-                    <div
-                      className="inline-grid gap-px border rounded p-1 bg-muted/40 cursor-pointer"
-                      style={{ gridTemplateColumns: `repeat(${tmpl.columns}, 1fr)` }}
-                      title="Click first empty label on your sheet"
-                    >
-                      {Array.from({ length: total }, (_, i) => {
-                        const pos = i + 1;
-                        return (
-                          <div
-                            key={i}
-                            onClick={() => setStartBarcodeLabel(pos)}
-                            title={`Start from label ${pos}`}
-                            className={`rounded-sm transition-colors ${
-                              pos < startBarcodeLabel
-                                ? "bg-slate-400"
-                                : pos === startBarcodeLabel
-                                ? "bg-primary"
-                                : "bg-white hover:bg-blue-100 border border-gray-200"
-                            }`}
-                            style={{ width: 11, height: 6 }}
-                          />
-                        );
-                      })}
-                    </div>
-                    {startBarcodeLabel > 1 && (
-                      <span className="text-xs text-muted-foreground">#{startBarcodeLabel}</span>
+                    {!isThermalRoll && (
+                      <>
+                        <div className="text-xs text-muted-foreground whitespace-nowrap">Start at:</div>
+                        <div
+                          className="inline-grid gap-px border rounded p-1 bg-muted/40 cursor-pointer"
+                          style={{ gridTemplateColumns: `repeat(${tmpl.columns}, 1fr)` }}
+                          title="Click first empty label on your sheet"
+                        >
+                          {Array.from({ length: total }, (_, i) => {
+                            const pos = i + 1;
+                            return (
+                              <div
+                                key={i}
+                                onClick={() => setStartBarcodeLabel(pos)}
+                                title={`Start from label ${pos}`}
+                                className={`rounded-sm transition-colors ${
+                                  pos < startBarcodeLabel
+                                    ? "bg-slate-400"
+                                    : pos === startBarcodeLabel
+                                    ? "bg-primary"
+                                    : "bg-white hover:bg-blue-100 border border-gray-200"
+                                }`}
+                                style={{ width: 11, height: 6 }}
+                              />
+                            );
+                          })}
+                        </div>
+                        {startBarcodeLabel > 1 && (
+                          <span className="text-xs text-muted-foreground">#{startBarcodeLabel}</span>
+                        )}
+                      </>
                     )}
                   </div>
                 );
@@ -1901,28 +1908,38 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                 : items.find((i) => i.barcode);
               return (
                 <div className="border rounded-lg p-4 bg-muted/30 mb-3 flex flex-wrap gap-6 items-start">
-                  {/* Live preview */}
+                  {/* Live preview — 3 labels stacked to show next-print position */}
                   <div className="flex flex-col items-center gap-1">
                     <div className="text-xs font-medium text-muted-foreground mb-1">Preview</div>
-                    <div
-                      className="relative border-2 border-dashed border-gray-300 bg-white"
-                      style={{ width: pw, height: ph, minWidth: pw, minHeight: ph }}
-                    >
-                      <div
-                        className="absolute border border-gray-800 bg-white overflow-hidden flex flex-col items-center justify-center text-center"
-                        style={{ left: ml, top: mt, width: lw, height: lh, fontSize: Math.max(4, lh * 0.12) }}
-                      >
-                        {sampleItem ? (
-                          <>
-                            {printerConfig.content.showName && <div style={{ fontSize: Math.max(4, lh * 0.14), fontWeight: 'bold', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100%', padding: '0 2px' }}>{sampleItem.name}</div>}
-                            {printerConfig.content.showSku && sampleItem.sku && <div style={{ fontSize: Math.max(3, lh * 0.11), color: '#555', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100%' }}>{sampleItem.sku}</div>}
-                            <div style={{ fontSize: Math.max(3, lh * 0.1), color: '#999', border: '1px solid #ccc', padding: '1px 4px', margin: '1px 0' }}>▮▯▮▯▮▮▯▮</div>
-                            {printerConfig.content.showPrice && sampleItem.price && <div style={{ fontSize: Math.max(3, lh * 0.13), fontWeight: 'bold' }}>R{sampleItem.price.toFixed(2)}</div>}
-                          </>
-                        ) : (
-                          <div style={{ color: '#aaa', fontSize: 8 }}>Sample</div>
-                        )}
-                      </div>
+                    <div className="flex flex-col gap-0">
+                      {[0, 1, 2].map((idx) => (
+                        <div
+                          key={idx}
+                          className="relative border-2 border-dashed border-gray-300 bg-white"
+                          style={{ width: pw, height: ph, minWidth: pw, minHeight: ph }}
+                        >
+                          <div
+                            className="absolute border border-gray-800 bg-white overflow-hidden flex flex-col items-center justify-center text-center"
+                            style={{ left: ml, top: mt, width: lw, height: lh, fontSize: Math.max(4, lh * 0.12) }}
+                          >
+                            {sampleItem ? (
+                              <>
+                                {printerConfig.content.showName && <div style={{ fontSize: Math.max(4, lh * 0.14), fontWeight: 'bold', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100%', padding: '0 2px' }}>{sampleItem.name}</div>}
+                                {printerConfig.content.showSku && sampleItem.sku && <div style={{ fontSize: Math.max(3, lh * 0.11), color: '#555', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '100%' }}>{sampleItem.sku}</div>}
+                                <div style={{ fontSize: Math.max(3, lh * 0.1), color: '#999', border: '1px solid #ccc', padding: '1px 4px', margin: '1px 0' }}>▮▯▮▯▮▮▯▮</div>
+                                {printerConfig.content.showPrice && sampleItem.price && <div style={{ fontSize: Math.max(3, lh * 0.13), fontWeight: 'bold' }}>R{sampleItem.price.toFixed(2)}</div>}
+                              </>
+                            ) : (
+                              <div style={{ color: '#aaa', fontSize: 8 }}>Sample</div>
+                            )}
+                          </div>
+                          {idx < 2 && (
+                            <div className="absolute bottom-0 left-0 right-0 text-center" style={{ fontSize: 7, color: '#bbb', lineHeight: '10px' }}>
+                              — next print —
+                            </div>
+                          )}
+                        </div>
+                      ))}
                     </div>
                     <div className="text-xs text-muted-foreground">{tmpl.pageWidth}×{tmpl.pageHeight}mm page</div>
                   </div>
