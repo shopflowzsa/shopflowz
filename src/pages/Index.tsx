@@ -1502,32 +1502,29 @@ export default function Index() {
         // Global search across all task fields
         
         // 1. Basic task fields
-        if (task.title.toLowerCase().includes(q)) return true;
+        if ((task.title || "").toLowerCase().includes(q)) return true;
         if (task.description?.toLowerCase().includes(q)) return true;
         if (task.jobNumber?.toLowerCase().includes(q)) return true;
-        if (task.id.toLowerCase().includes(q)) return true;
-        if (task.status.toLowerCase().includes(q)) return true;
-        if (task.priority.toLowerCase().includes(q)) return true;
+        if ((task.id || "").toLowerCase().includes(q)) return true;
+        if ((task.status || "").toLowerCase().includes(q)) return true;
+        if ((task.priority || "").toLowerCase().includes(q)) return true;
         if (task.assignee?.toLowerCase().includes(q)) return true;
-        
+
         // 2. Custom field values
         for (const fieldValue of task.customFieldValues || []) {
           const fieldDef = workspace.customFields.find(f => f.id === fieldValue.fieldId);
           if (fieldDef) {
-            // Search field name
-            if (fieldDef.name.toLowerCase().includes(q)) return true;
-            
-            // Search field value (convert to string for searching)
+            if ((fieldDef.name || "").toLowerCase().includes(q)) return true;
             const valueStr = String(fieldValue.value || '').toLowerCase();
             if (valueStr.includes(q)) return true;
           }
         }
-        
+
         // 3. Comments
         if (task.comments) {
           for (const comment of task.comments) {
-            if (comment.text.toLowerCase().includes(q)) return true;
-            if (comment.author.toLowerCase().includes(q)) return true;
+            if ((comment.text || "").toLowerCase().includes(q)) return true;
+            if ((comment.author || "").toLowerCase().includes(q)) return true;
           }
         }
         
