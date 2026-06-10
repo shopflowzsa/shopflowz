@@ -171,7 +171,7 @@ export async function pickPrinter(): Promise<PrinterIdentity> {
 }
 
 async function openDevice(device: USBDevice): Promise<ConnectedPrinter> {
-  await device.open();
+  if (!device.opened) await device.open();
   if (!device.configuration) {
     await device.selectConfiguration(1);
   }
@@ -218,7 +218,8 @@ async function ensurePrinter(target?: { vendorId?: number; productId?: number })
   if (target?.vendorId != null && target?.productId != null) {
     const cacheKey = keyFor(target.vendorId, target.productId);
     const cached = printerCache.get(cacheKey);
-    if (cached) return cached;
+    if (cached?.device.opened) return cached;
+    if (cached) printerCache.delete(cacheKey); // stale — reopen below
 
     const granted: USBDevice[] = await usb.getDevices();
     const match = granted.find(
@@ -247,7 +248,17 @@ async function ensurePrinter(target?: { vendorId?: number; productId?: number })
 
 async function sendBytes(bytes: Uint8Array, target?: { vendorId?: number; productId?: number }): Promise<void> {
   const printer = await ensurePrinter(target);
-  await printer.device.transferOut(printer.endpointOut, bytes);
+  try {
+    await printer.device.transferOut(printer.endpointOut, bytes);
+  } catch (err) {
+    // Device went stale (unplugged/replugged, or claimed by another tab). Clear
+    // the cache and retry once with a fresh connection.
+    if (target?.vendorId != null && target?.productId != null) {
+      printerCache.delete(keyFor(target.vendorId, target.productId));
+    }
+    const fresh = await ensurePrinter(target);
+    await fresh.device.transferOut(fresh.endpointOut, bytes);
+  }
 }
 
 // ── High-level: print a job sticker ─────────────────────────────────────────
