@@ -141,9 +141,13 @@ export interface PrinterIdentity {
   label: string; // user-facing name e.g. "Xprinter XP-Q200"
 }
 
-// Cache by vendorId:productId so multiple printers can stay open at the same time.
-const printerCache = new Map<string, ConnectedPrinter>();
+// Remember which devices have been granted so we can skip the picker on reuse.
+// We no longer keep devices open between jobs — claim/release/close on every print.
+const grantedKeys = new Set<string>();
 const keyFor = (vId: number, pId: number) => `${vId.toString(16)}:${pId.toString(16)}`;
+
+// Kept for the resetThermalPrinter() public API.
+const printerCache = new Map<string, ConnectedPrinter>();
 
 function buildLabel(device: USBDevice): string {
   return device.productName
@@ -172,9 +176,8 @@ export async function pickPrinter(): Promise<PrinterIdentity> {
 
 async function openDevice(device: USBDevice): Promise<ConnectedPrinter> {
   if (!device.opened) await device.open();
-  if (!device.configuration) {
-    await device.selectConfiguration(1);
-  }
+  if (!device.configuration) await device.selectConfiguration(1);
+
   let endpointOut: number | undefined;
   let interfaceNumber: number | undefined;
   const config = device.configuration!;
@@ -194,73 +197,47 @@ async function openDevice(device: USBDevice): Promise<ConnectedPrinter> {
   if (endpointOut === undefined || interfaceNumber === undefined) {
     throw new Error("Selected device doesn't expose a bulk OUT endpoint — not a compatible printer.");
   }
-  // Always release first — if it wasn't claimed this is a no-op, if it was
-  // claimed (stale connection) this clears it so the claim below succeeds.
-  try { await device.releaseInterface(interfaceNumber); } catch { /* not claimed — fine */ }
   await device.claimInterface(interfaceNumber);
-  return {
-    device,
-    endpointOut,
-    interfaceNumber,
-    configurationValue: config.configurationValue,
-  };
+  return { device, endpointOut, interfaceNumber, configurationValue: config.configurationValue };
+}
+
+async function closeDevice(printer: ConnectedPrinter): Promise<void> {
+  try { await printer.device.releaseInterface(printer.interfaceNumber); } catch { /* ignore */ }
+  try { await printer.device.close(); } catch { /* ignore */ }
 }
 
 /**
- * Resolve a printer connection for the given saved identity. If the saved
- * printer hasn't been granted (or none is saved), opens the picker.
+ * Resolve the USBDevice for the given saved identity. If not yet granted,
+ * opens the picker. Does NOT open or claim — callers do that per-job.
  */
-async function ensurePrinter(target?: { vendorId?: number; productId?: number }): Promise<ConnectedPrinter> {
+async function resolveDevice(target?: { vendorId?: number; productId?: number }): Promise<USBDevice> {
   if (!isThermalPrintSupported()) {
     throw new Error("WebUSB is not available in this browser. Use Chrome or Edge on a desktop plugged into the printer.");
   }
-
   const usb = (navigator as any).usb;
 
-  // 1) If we have a saved (vendorId, productId), try to reuse a granted device that matches.
   if (target?.vendorId != null && target?.productId != null) {
-    const cacheKey = keyFor(target.vendorId, target.productId);
-    const cached = printerCache.get(cacheKey);
-    if (cached?.device.opened) return cached;
-    if (cached) printerCache.delete(cacheKey); // stale — reopen below
-
     const granted: USBDevice[] = await usb.getDevices();
-    const match = granted.find(
-      d => d.vendorId === target.vendorId && d.productId === target.productId,
-    );
-    if (match) {
-      const opened = await openDevice(match);
-      printerCache.set(cacheKey, opened);
-      return opened;
-    }
-    // Saved identity exists but not granted yet on this device → fall through to picker.
+    const match = granted.find(d => d.vendorId === target.vendorId && d.productId === target.productId);
+    if (match) return match;
+    // Not yet granted on this browser — fall through to picker.
   }
 
-  // 2) Fall back: pick any already-granted device, or open the picker.
   const granted: USBDevice[] = await usb.getDevices();
-  let device = granted[0];
-  if (!device) {
-    device = await usb.requestDevice({ filters: [] }); // any device
-  }
-  if (!device) throw new Error("No printer selected.");
-
-  const opened = await openDevice(device);
-  printerCache.set(keyFor(device.vendorId, device.productId), opened);
-  return opened;
+  if (granted[0]) return granted[0];
+  const picked = await usb.requestDevice({ filters: [] });
+  if (!picked) throw new Error("No printer selected.");
+  return picked;
 }
 
 async function sendBytes(bytes: Uint8Array, target?: { vendorId?: number; productId?: number }): Promise<void> {
-  const printer = await ensurePrinter(target);
+  // Open fresh every time so we never fight with another tab over a claimed interface.
+  const device = await resolveDevice(target);
+  const printer = await openDevice(device);
   try {
     await printer.device.transferOut(printer.endpointOut, bytes);
-  } catch (err) {
-    // Device went stale (unplugged/replugged, or claimed by another tab). Clear
-    // the cache and retry once with a fresh connection.
-    if (target?.vendorId != null && target?.productId != null) {
-      printerCache.delete(keyFor(target.vendorId, target.productId));
-    }
-    const fresh = await ensurePrinter(target);
-    await fresh.device.transferOut(fresh.endpointOut, bytes);
+  } finally {
+    await closeDevice(printer);
   }
 }
 
