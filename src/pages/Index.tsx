@@ -69,6 +69,7 @@ import { DataSheetsPage } from "@/pages/DataSheetsPage";
 import { TaskCreationListPage } from "@/pages/TaskCreationListPage";
 import { ActivityReportPage } from "@/pages/ActivityReportPage";
 import { AuditLogPage } from "@/pages/AuditLogPage";
+import { WhatsAppMessengerPage } from "@/pages/WhatsAppMessengerPage";
 import { StaffDashboardPage } from "@/pages/StaffDashboardPage";
 import { FaultReportDialog } from "@/components/crm/FaultReportDialog";
 import { ChangePasswordDialog } from "@/components/crm/ChangePasswordDialog";
@@ -336,6 +337,7 @@ export default function Index() {
   const [showOutstandingRepairs, setShowOutstandingRepairs] = useState(false);
   const [showActivityReports, setShowActivityReports] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
+  const [showWhatsAppMessenger, setShowWhatsAppMessenger] = useState(false);
   const [showStaffDashboard, setShowStaffDashboard] = useState(false);
   const [showMorningBriefing, setShowMorningBriefing] = useState(false);
   const [showDataSheets, setShowDataSheets] = useState(false);
@@ -548,6 +550,7 @@ export default function Index() {
     setShowEmail(false);
     setShowActivityReports(false);
     setShowAuditLog(false);
+    setShowWhatsAppMessenger(false);
     setShowStaffDashboard(false);
     setShowDataSheets(false);
     setShowWalkInSale(false);
@@ -589,7 +592,7 @@ export default function Index() {
   const anyOverlayActive = showInventory || showStockMovements || showQuotations || showInvoicing ||
     showCustomers || showStatements || showBusinessOverview || showTechAssessment ||
     showOutstandingRepairs || showTaskCreationList || showSalesOverview || showInventoryOverview ||
-    showActivityReports || showAuditLog || showEmail || showDataSheets ||
+    showActivityReports || showAuditLog || showWhatsAppMessenger || showEmail || showDataSheets ||
     showInvoiceRegister || showInventoryRegister || showBanking || showBusinessPlanning || showEcommerceOperations || showExpenseSlips;
 
   // Track whether a task card is being HTML5-dragged (to show drop zones)
@@ -3040,6 +3043,7 @@ export default function Index() {
           onOpenDataSheets={() => { closeAllOverlays(); setShowDataSheets(true); }}
           onOpenActivityReports={() => { closeAllOverlays(); setShowActivityReports(true); }}
           onOpenAuditLog={() => { closeAllOverlays(); setShowAuditLog(true); }}
+          onOpenWhatsAppMessenger={() => { closeAllOverlays(); setShowWhatsAppMessenger(true); }}
           onOpenStaffDashboard={() => { closeAllOverlays(); setShowStaffDashboard(true); }}
           onOpenTaskCreationList={() => { closeAllOverlays(); setShowTaskCreationList(true); }}
           onOpenSalesOverview={() => { closeAllOverlays(); setShowSalesOverview(true); }}
@@ -3521,6 +3525,11 @@ export default function Index() {
           {showAuditLog && (
             <AuditLogPage
               onClose={() => setShowAuditLog(false)}
+            />
+          )}
+          {showWhatsAppMessenger && (
+            <WhatsAppMessengerPage
+              onClose={() => setShowWhatsAppMessenger(false)}
             />
           )}
           {showActivityReports && (

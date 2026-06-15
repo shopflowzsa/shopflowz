@@ -99,6 +99,8 @@ interface CrmSidebarProps {
   onOpenNotifications: () => void;
   onOpenSetupWizard?: () => void;
   onOpenAuditLog?: () => void;
+  onOpenWhatsAppMessenger?: () => void;
+  whatsappUnreadCount?: number;
 }
 
 export function CrmSidebar({
@@ -107,7 +109,7 @@ export function CrmSidebar({
   onRenameSpace, onRenameFolder, onRenameList,
   onDeleteSpace, onDeleteFolder, onDeleteList,
   onOpenCustomFields, onTaskStatuses, onOpenForms, onOpenAccounts,
-  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog,
+  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount,
 }: CrmSidebarProps) {
   const { state } = useSidebar();
   const {
@@ -815,6 +817,39 @@ export function CrmSidebar({
                     {(emailUnreadCount ?? 0) > 0 && (
                       <span className="ml-auto text-xs font-bold bg-red-500 text-white rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center leading-none">
                         {emailUnreadCount! > 99 ? "99+" : emailUnreadCount}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          )}
+
+          {/* ── WhatsApp Messenger ── */}
+          {hasPermission("whatsapp") && !moduleHidden("whatsapp") && onOpenWhatsAppMessenger && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={onOpenWhatsAppMessenger}
+              className="group hover:bg-green-900/40 rounded-md text-green-400"
+              title="WhatsApp Messenger — team inbox"
+            >
+              <div className="flex items-center gap-2 w-full">
+                <div className="relative shrink-0">
+                  <MessageSquare className="h-4 w-4" />
+                  {(whatsappUnreadCount ?? 0) > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500" />
+                    </span>
+                  )}
+                </div>
+                {!collapsed && (
+                  <>
+                    <span className="text-sm font-medium truncate flex-1">WhatsApp Messenger</span>
+                    {(whatsappUnreadCount ?? 0) > 0 && (
+                      <span className="ml-auto text-xs font-bold bg-green-500 text-white rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center leading-none">
+                        {(whatsappUnreadCount ?? 0) > 99 ? "99+" : whatsappUnreadCount}
                       </span>
                     )}
                   </>
