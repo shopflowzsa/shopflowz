@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { supabase } from "@/lib/supabase";
+import { supabase, supabaseServiceRole, sbInsertComment } from "@/lib/supabase";
 import { useActivityTracking } from "@/hooks";
 import { logActivity } from "@/lib/activityTrackingService";
 import { useToast } from "@/hooks/use-toast";
@@ -33,6 +33,7 @@ import { JobSettingsDialog } from "@/components/crm/JobSettingsDialog";
 import { SupervisorPasswordDialog } from "@/components/crm/SupervisorPasswordDialog";
 import { SalesSettingsDialog } from "@/components/crm/SalesSettingsDialog";
 import { loadSalesSettings } from "@/lib/salesSettingsService";
+import { TaskLimitSettingsDialog, loadTaskLimitSettings, TaskLimitSettings } from "@/components/crm/TaskLimitSettingsDialog";
 import { FieldMapperDialog } from "@/components/crm/FieldMapperDialog";
 import { loadFieldMapping, FieldMapping, DEFAULT_FIELD_MAPPING } from "@/lib/fieldMapperService";
 import { MorningBriefingDialog } from "@/components/crm/MorningBriefingDialog";
@@ -51,6 +52,7 @@ import { GlobalSearchModal } from "@/components/crm/GlobalSearchModal";
 import { QuotationCreationPage } from "@/pages/QuotationCreationPage";
 import { AccountsPage } from "@/pages/Accounts";
 import { InventoryPage } from "@/pages/InventoryPage";
+import { WalkInSalePage } from "@/pages/WalkInSalePage";
 import { EmailPage } from "@/pages/EmailPage";
 import { getUnreadCount } from "@/lib/emailAccountService";
 import StockMovementsPage from "@/pages/StockMovementsPage";
@@ -66,6 +68,7 @@ import { OutstandingRepairsPage } from "@/pages/OutstandingRepairsPage";
 import { DataSheetsPage } from "@/pages/DataSheetsPage";
 import { TaskCreationListPage } from "@/pages/TaskCreationListPage";
 import { ActivityReportPage } from "@/pages/ActivityReportPage";
+import { AuditLogPage } from "@/pages/AuditLogPage";
 import { StaffDashboardPage } from "@/pages/StaffDashboardPage";
 import { FaultReportDialog } from "@/components/crm/FaultReportDialog";
 import { ChangePasswordDialog } from "@/components/crm/ChangePasswordDialog";
@@ -81,10 +84,10 @@ import { SpaceOverview } from "@/components/crm/SpaceOverview";
 import { FolderOverview } from "@/components/crm/FolderOverview";
 import { useAuth } from "@/contexts/AuthContext";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { loadWorkspaceState, saveWorkspaceState, subscribeWorkspaceState, subscribeFormSubmissions, getPendingFormSubmissions, deleteFormSubmission, publishForm, unpublishForm, claimJobNumberAndAddTask, deleteTaskFromWorkspace, updateTaskInWorkspace, FormSubmission } from "@/lib/workspaceService";
+import { loadWorkspaceState, saveWorkspaceState, subscribeWorkspaceState, subscribeTaskChanges, loadTasksForWorkspace, upsertTask, subscribeFormSubmissions, getPendingFormSubmissions, deleteFormSubmission, publishForm, unpublishForm, claimJobNumberAndAddTask, deleteTaskFromWorkspace, FormSubmission } from "@/lib/workspaceService";
 import { loadWhatsAppSettings, sendTaskWhatsApp, sendInvoiceWhatsApp } from "@/lib/whatsappService";
 import { createJobDepositPaylink } from "@/lib/ikhokhaJobService";
-import { logNewTask } from "@/lib/jobLogService";
+import { logNewTask, reconcileRecentJobLog } from "@/lib/jobLogService";
 import { loadPrinterSettings, printBookingSlip } from "@/lib/printerService";
 import { logTaskCreated, logTaskUpdated, logTaskDeleted, logTasksBulkDeleted } from "@/lib/auditService";
 import { getQuotation } from "@/lib/quotationService";
@@ -95,6 +98,8 @@ import { maybeTakeDailySnapshot } from "@/lib/snapshotService";
 import { useAppNav, NavState } from "@/hooks/useAppNav";
 import { WorkspaceState, Task, TaskComment, ViewMode, TaskStatus, TaskPriority, CustomFieldDefinition, FormDefinition, DEFAULT_STATUSES, PRIORITIES, JOBS_WITH_ISSUES_SPACE_ID, List } from "@/types/crm";
 import { AutomationsDialog } from "@/components/crm/AutomationsDialog";
+
+const DONE_STATUSES = new Set(["done","complete","invoiced","paid","completed"]);
 
 // Empty workspace state (no sample data to prevent flash of wrong content)
 const EMPTY_WORKSPACE: WorkspaceState = {
@@ -162,14 +167,24 @@ export default function Index() {
 
   useEffect(() => {
     if (!workspaceId) return;
-    loadSalesSettings(workspaceId).then(s => { if (s.companyName) setCompanyName(s.companyName); });
-    loadFieldMapping(workspaceId).then(m => setFieldMapping(m));
-    // Show setup wizard automatically for workspaces that haven't completed it
-    import("@/lib/supabase").then(({ supabase }) => {
-      supabase.from("workspace_settings")
-        .select("data").eq("workspace_id", workspaceId).eq("category", "setup_wizard").single()
-        .then(({ data }) => { if (!data?.data?.completed) setShowSetupWizard(true); });
-    });
+    // Single query for all workspace_settings categories instead of 4 separate round-trips
+    supabaseServiceRole
+      .from("workspace_settings")
+      .select("category, data")
+      .eq("workspace_id", workspaceId)
+      .in("category", ["sales", "field_mapping", "task_limits", "setup_wizard"])
+      .then(({ data: rows }) => {
+        const byCategory = Object.fromEntries((rows || []).map(r => [r.category, r.data]));
+        // sales
+        if (byCategory.sales?.companyName) setCompanyName(byCategory.sales.companyName);
+        // field_mapping
+        if (byCategory.field_mapping) setFieldMapping({ ...DEFAULT_FIELD_MAPPING, ...byCategory.field_mapping });
+        // task_limits
+        const tl = byCategory.task_limits;
+        setTaskLimitSettings(tl && tl.limit > 0 ? tl : null);
+        // setup_wizard
+        if (!byCategory.setup_wizard?.completed) setShowSetupWizard(true);
+      });
   }, [workspaceId]);
 
   // Refresh email unread count every 2 minutes
@@ -190,6 +205,10 @@ export default function Index() {
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Tracks writes we initiated so we can ignore the echoed Firestore snapshot
   const selfWriteRef = useRef(false);
+  // Track recently-saved task IDs so the subscription echo for OUR save
+  // doesn't overwrite a subsequent local edit, while still accepting updates
+  // from OTHER users for the same task.
+  const recentlySavedTaskIds = useRef<Set<string>>(new Set());
   // Pending task save — queued on every field edit, flushed when the panel closes.
   // This avoids firing the RPC on every keystroke (which times out on large workspaces).
   const taskDbSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -316,6 +335,7 @@ export default function Index() {
   const [showTechAssessment, setShowTechAssessment] = useState(false);
   const [showOutstandingRepairs, setShowOutstandingRepairs] = useState(false);
   const [showActivityReports, setShowActivityReports] = useState(false);
+  const [showAuditLog, setShowAuditLog] = useState(false);
   const [showStaffDashboard, setShowStaffDashboard] = useState(false);
   const [showMorningBriefing, setShowMorningBriefing] = useState(false);
   const [showDataSheets, setShowDataSheets] = useState(false);
@@ -330,9 +350,15 @@ export default function Index() {
   const [showEcommerceAnalytics, setShowEcommerceAnalytics] = useState(false);
   const [showExpenseSlips, setShowExpenseSlips] = useState(false);
   const [expenseSlipInitialAction, setExpenseSlipInitialAction] = useState<"camera" | "upload" | undefined>();
+  const [showWalkInSale, setShowWalkInSale] = useState(false);
   const [showSpaceOverview, setShowSpaceOverview] = useState<string | null>(null);
   const [showFolderOverview, setShowFolderOverview] = useState<string | null>(null);
   const [showSalesSettings, setShowSalesSettings] = useState(false);
+  const [showTaskLimitSettings, setShowTaskLimitSettings] = useState(false);
+  const [taskLimitSettings, setTaskLimitSettings] = useState<TaskLimitSettings | null>(null);
+  const [taskLockoutOverridden, setTaskLockoutOverridden] = useState(false);
+  const [showOverrideDialog, setShowOverrideDialog] = useState(false);
+  const [overrideInput, setOverrideInput] = useState("");
   const [showFieldMapper, setShowFieldMapper] = useState(false);
   const [fieldMapping, setFieldMapping] = useState<FieldMapping>(DEFAULT_FIELD_MAPPING);
   const [showActivityMonitor, setShowActivityMonitor] = useState(false);
@@ -480,9 +506,18 @@ export default function Index() {
     if (!workspaceId || isRefreshing) return;
     setIsRefreshing(true);
     try {
-      const fresh = await loadWorkspaceState(workspaceId);
-      setWorkspace(fresh);
-      workspaceRef.current = fresh;
+      const [freshBlob, freshTasks] = await Promise.all([
+        loadWorkspaceState(workspaceId),
+        loadTasksForWorkspace(workspaceId),
+      ]);
+      setWorkspace(prev => {
+        const merged = {
+          ...freshBlob,
+          tasks: freshTasks.length > 0 ? freshTasks : prev.tasks,
+        };
+        workspaceRef.current = merged;
+        return merged;
+      });
     } catch (e) {
       console.error("Refresh failed", e);
     } finally {
@@ -512,8 +547,10 @@ export default function Index() {
     setShowInvoiceFromTask(false);
     setShowEmail(false);
     setShowActivityReports(false);
+    setShowAuditLog(false);
     setShowStaffDashboard(false);
     setShowDataSheets(false);
+    setShowWalkInSale(false);
     // Always close the task detail panel when leaving CRM context
     setSelectedTask(null);
   };
@@ -552,7 +589,7 @@ export default function Index() {
   const anyOverlayActive = showInventory || showStockMovements || showQuotations || showInvoicing ||
     showCustomers || showStatements || showBusinessOverview || showTechAssessment ||
     showOutstandingRepairs || showTaskCreationList || showSalesOverview || showInventoryOverview ||
-    showActivityReports || showEmail || showDataSheets ||
+    showActivityReports || showAuditLog || showEmail || showDataSheets ||
     showInvoiceRegister || showInventoryRegister || showBanking || showBusinessPlanning || showEcommerceOperations || showExpenseSlips;
 
   // Track whether a task card is being HTML5-dragged (to show drop zones)
@@ -704,10 +741,30 @@ export default function Index() {
           }
         }
 
-        // Load initial workspace state
-        console.log('[Workspace Load] Loading from Firebase with workspaceId:', workspaceId);
-        const initialState = await loadWorkspaceState(workspaceId);
-        console.log('[Workspace Load] Loaded from Firebase:', {
+        // Phase 1: load workspace structure (blob) first — fast, small payload.
+        // Show the UI immediately with cached tasks, then fetch fresh tasks in the background.
+        console.log('[Workspace Load] Loading from Supabase with workspaceId:', workspaceId);
+        const blobState = await loadWorkspaceState(workspaceId);
+
+        // Show structure immediately so the sidebar/lists render without waiting for tasks
+        const structureOnly: typeof blobState = {
+          ...blobState,
+          tasks: blobState.tasks?.length ? blobState.tasks : (workspace.tasks ?? []),
+        };
+        setWorkspace(prev => {
+          const merged = { ...structureOnly, tasks: structureOnly.tasks.length > 0 ? structureOnly.tasks : prev.tasks };
+          workspaceRef.current = merged;
+          return merged;
+        });
+        setIsLoadingWorkspace(false);
+
+        // Phase 2: load tasks in background — update when ready
+        const taskRows = await loadTasksForWorkspace(workspaceId);
+        const initialState: typeof blobState = {
+          ...blobState,
+          tasks: taskRows.length > 0 ? taskRows : (blobState.tasks ?? []),
+        };
+        console.log('[Workspace Load] Loaded from Supabase:', {
           tasks: initialState.tasks.length,
           lists: initialState.lists.length,
           spaces: initialState.spaces.length,
@@ -766,8 +823,16 @@ export default function Index() {
         }
 
         console.log('[Workspace Load] Setting workspace with', cleanState.tasks.length, 'tasks');
-        setWorkspace(cleanState);
-        workspaceRef.current = cleanState; // sync ref immediately so runDateAutomations sees the fresh state
+        // Preserve any tasks already loaded from cache or the tasks table —
+        // the blob carries 0 tasks after migration so we must never overwrite.
+        setWorkspace(prev => {
+          const merged = {
+            ...cleanState,
+            tasks: cleanState.tasks.length > 0 ? cleanState.tasks : prev.tasks,
+          };
+          workspaceRef.current = merged;
+          return merged;
+        });
         stateVersionRef.current = workspaceFingerprint(cleanState);
         setMemCachedWorkspace(workspaceId, cleanState);
         setCachedWorkspace(workspaceId, cleanState);
@@ -791,6 +856,9 @@ export default function Index() {
         loadedWorkspaceIdRef.current = workspaceId;
         // Warm inventory cache in the background so clicking a task is instant
         warmInventoryCache(workspaceId);
+        // Restore any tasks from the last 7 days that are in job_log but missing
+        // from the tasks table (e.g. due to a missed realtime INSERT event).
+        reconcileRecentJobLog(workspaceId).catch(console.warn);
         
         // Publish all existing forms (migration for existing workspaces)
         if (cleanState.forms && cleanState.forms.length > 0) {
@@ -801,52 +869,63 @@ export default function Index() {
           });
         }
         
-        // Subscribe to real-time updates (multi-device/tab sync)
-        // Skip ONLY if we triggered this write ourselves — Supabase only fires on real DB changes
-        unsubscribe = subscribeWorkspaceState(workspaceId, (updatedState) => {
-          console.log('[Workspace Subscription] Received update:', updatedState.tasks.length, 'tasks');
-          if (selfWriteRef.current) {
-            console.log('[Workspace Subscription] Skipping - self-write');
+        // Subscribe to per-task realtime changes — each event carries exactly
+        // one task row. No full-state re-fetch, no blob overwrite race.
+        const applyTaskChange = (incomingTask: Task, isDelete = false) => {
+          // Skip only if THIS specific task was recently saved by this tab.
+          // A global selfWriteRef would also block other users' updates for
+          // unrelated tasks that happen to arrive in the same window.
+          if (recentlySavedTaskIds.current.has(incomingTask.id)) {
+            console.log('[Task Subscription] Skipping self-write echo for task', incomingTask.id);
             return;
           }
-          const fingerprint = workspaceFingerprint(updatedState);
-          if (fingerprint === stateVersionRef.current) {
-            console.log('[Workspace Subscription] Skipping - no changes');
-            return; // truly nothing new
-          }
+          setWorkspace(prev => {
+            const next = { ...prev };
+            if (isDelete) {
+              next.tasks = prev.tasks.filter(t => t.id !== incomingTask.id);
+            } else {
+              const idx = prev.tasks.findIndex(t => t.id === incomingTask.id);
+              if (idx === -1) {
+                next.tasks = [...prev.tasks, incomingTask];
+              } else {
+                const updated = [...prev.tasks];
+                updated[idx] = incomingTask;
+                next.tasks = updated;
+              }
+            }
+            workspaceRef.current = next;
+            return next;
+          });
+        };
 
-          // Guard: never let an incoming state with far fewer tasks overwrite a
-          // richer local state — this prevents a stale DB read (e.g. subscription
-          // initial load timing out and returning empty) from blanking the workspace.
-          const incomingCount = (updatedState as WorkspaceState).tasks?.length ?? 0;
-          const currentCount = workspaceRef.current?.tasks?.length ?? 0;
-          if (currentCount > 10 && incomingCount < currentCount * 0.5) {
-            console.warn(`[Workspace Subscription] Rejecting state with ${incomingCount} tasks — current has ${currentCount}. Possible stale read.`);
-            return;
-          }
-
-          // Concurrent-edit detection: if we still have a local change waiting
-          // to flush to the server, and a remote update arrives that we didn't
-          // make, someone else just saved. Our pending save (when it fires)
-          // will use workspaceRef.current and is likely to overwrite their
-          // changes. Warn the user so they know to refresh if confused.
-          if (pendingSaveRef.current) {
-            // Preserve local unsaved changes — our save will merge with DB state.
-            // After save completes we re-fetch to pick up this concurrent change.
-            console.log('[Workspace Subscription] Deferring concurrent update — local save in flight');
-            return;
-          }
-
-          console.log('[Workspace Subscription] Applying update');
-          stateVersionRef.current = fingerprint;
-          setWorkspace(updatedState);
-          setMemCachedWorkspace(workspaceId, updatedState);
-          setCachedWorkspace(workspaceId, updatedState);
+        unsubscribe = subscribeTaskChanges(workspaceId, {
+          onInsert: (task) => {
+            console.log('[Task Subscription] INSERT', task.id);
+            applyTaskChange(task);
+          },
+          onUpdate: (task) => {
+            console.log('[Task Subscription] UPDATE', task.id);
+            applyTaskChange(task);
+          },
+          onDelete: (taskId) => {
+            console.log('[Task Subscription] DELETE', taskId);
+            if (selfWriteRef.current) return;
+            setWorkspace(prev => {
+              const next = { ...prev, tasks: prev.tasks.filter(t => t.id !== taskId) };
+              workspaceRef.current = next;
+              return next;
+            });
+          },
         });
+
+        // workspace_state subscription removed — task saves no longer touch the
+        // blob so there is nothing to listen for there. The tasks table
+        // subscription above handles all live sync.
       } catch (error) {
         console.error('[Workspace Load] Failed to load workspace:', error);
-        // Only reset to empty workspace if we don't already have data
-        if (workspace.tasks.length === 0) {
+        // Never blank an already-loaded workspace on a failed reload — keep
+        // whatever tasks are already visible. Only set empty on the very first load.
+        if (workspaceRef.current.tasks.length === 0) {
           console.log('[Workspace Load] Setting empty workspace (no existing data)');
           setWorkspace(EMPTY_WORKSPACE);
         } else {
@@ -864,43 +943,42 @@ export default function Index() {
 
     loadAndSubscribe();
 
-    // ─── 5-minute polling fallback ────────────────────────────────────────
-    // Safety net in case the WebSocket misses an event. Reduced from 30s to
-    // 5 min — realtime subscriptions handle live sync; polling is last resort only.
+    // ─── 60-second polling fallback ──────────────────────────────────────
+    // Safety net in case the WebSocket misses an event.
     const pollInterval = setInterval(async () => {
       if (selfWriteRef.current) return;
-      if (pendingSaveRef.current) return; // skip if local changes haven't been saved yet
+      if (pendingSaveRef.current) return;
       try {
-        const fresh = await loadWorkspaceState(workspaceId);
-        // Check again after the async read — a move could have happened while we were fetching
+        const freshTasks = await loadTasksForWorkspace(workspaceId);
         if (pendingSaveRef.current || selfWriteRef.current) return;
-        const fingerprint = workspaceFingerprint(fresh);
-        if (fingerprint === stateVersionRef.current) return;
-        stateVersionRef.current = fingerprint;
-        setWorkspace(fresh);
-        setMemCachedWorkspace(workspaceId, fresh);
-        setCachedWorkspace(workspaceId, fresh);
+        if (freshTasks.length === 0) return;
+        setWorkspace(prev => {
+          const next = { ...prev, tasks: freshTasks };
+          workspaceRef.current = next;
+          return next;
+        });
       } catch {
         // silently ignore poll errors
       }
-    }, 5 * 60_000);
+    }, 60_000);
 
     // ─── Visibility-change refresh ────────────────────────────────────────
-    // When the user switches back to the tab after being away, fetch immediately
+    // When the user switches back to the tab after being away, reconcile tasks only
     const onVisible = async () => {
       if (document.visibilityState !== 'visible') return;
       if (selfWriteRef.current) return;
-      if (pendingSaveRef.current) return; // skip if local changes haven't been saved yet
+      if (pendingSaveRef.current) return;
+      // Restore any tasks missing from the tasks table before re-fetching
+      reconcileRecentJobLog(workspaceId).catch(console.warn);
       try {
-        const fresh = await loadWorkspaceState(workspaceId);
-        // Check again after the async read — a move could have happened while we were fetching
+        const freshTasks = await loadTasksForWorkspace(workspaceId);
         if (pendingSaveRef.current || selfWriteRef.current) return;
-        const fingerprint = workspaceFingerprint(fresh);
-        if (fingerprint === stateVersionRef.current) return;
-        stateVersionRef.current = fingerprint;
-        setWorkspace(fresh);
-        setMemCachedWorkspace(workspaceId, fresh);
-        setCachedWorkspace(workspaceId, fresh);
+        if (freshTasks.length === 0) return;
+        setWorkspace(prev => {
+          const next = { ...prev, tasks: freshTasks };
+          workspaceRef.current = next;
+          return next;
+        });
       } catch {
         // silently ignore
       }
@@ -951,19 +1029,19 @@ export default function Index() {
     // so the save completes before the user can navigate away.
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
-      selfWriteRef.current = true;
       const snapForSave = workspaceRef.current;
-      console.log('[SAVE] Firing — saving', snapForSave.tasks.length, 'tasks');
+      // Tasks live in the tasks table — never write them into the blob.
+      // Only save structural state: spaces, lists, forms, counters etc.
+      const blobOnly = { ...snapForSave, tasks: [] } as WorkspaceState;
+      console.log('[SAVE] Firing — saving structural state (spaces/lists/forms)');
 
-      // Retry transient failures with backoff: 0s, 1s, 3s. After 3 attempts,
-      // surface a toast so the user knows their change didn't make it.
       const delays = [0, 1000, 3000];
       let lastError: unknown = null;
       let saved = false;
       for (let i = 0; i < delays.length; i++) {
         if (delays[i]) await new Promise(r => setTimeout(r, delays[i]));
         try {
-          await saveWorkspaceState(workspaceId, workspaceRef.current);
+          await saveWorkspaceState(workspaceId, blobOnly);
           saved = true;
           console.log('[SAVE] Success on attempt', i + 1);
           break;
@@ -973,9 +1051,10 @@ export default function Index() {
         }
       }
 
+      pendingSaveRef.current = false;
+
       if (!saved) {
         console.error('[SAVE] FAILED after all retries:', lastError);
-        // Throttle the toast so a flapping connection doesn't spam.
         const sinceLast = Date.now() - lastSaveErrorAtRef.current;
         if (sinceLast > 4000) {
           lastSaveErrorAtRef.current = Date.now();
@@ -985,31 +1064,33 @@ export default function Index() {
             description: 'Network problem. Your last change may be lost on refresh — try again or check your connection.',
           });
         }
-      } else {
-        pendingSaveRef.current = false;
-        // Re-fetch after our own save to pick up any concurrent changes that were
-        // blocked by pendingSaveRef while we were editing (e.g. another user moved
-        // a task while we were typing — they were queued and this reconciles them).
-        try {
-          const fresh = await loadWorkspaceState(workspaceId);
-          const freshFingerprint = workspaceFingerprint(fresh);
-          if (freshFingerprint !== stateVersionRef.current) {
-            console.log('[SAVE] Applying concurrent changes picked up after save');
-            stateVersionRef.current = freshFingerprint;
-            setWorkspace(fresh);
-            workspaceRef.current = fresh;
-            setMemCachedWorkspace(workspaceId, fresh);
-            setCachedWorkspace(workspaceId, fresh);
-          }
-        } catch {
-          // Non-fatal — subscription will catch any future DB changes
-        }
       }
-
-      // Reset after snapshot has had time to arrive (Supabase usually < 500ms)
-      setTimeout(() => { selfWriteRef.current = false; }, 1500);
+      // No post-save re-fetch — tasks table subscription keeps task list live.
     }, opts?.immediate ? 0 : 400);
   }, [workspaceId, toast]);
+
+  // Persist an array of changed tasks to the tasks table (fire-and-forget).
+  // Used by handlers that call updateWorkspace to mutate tasks locally but
+  // need those changes to also reach the DB so they survive a refresh.
+  // Registers each task ID in recentlySavedTaskIds so the realtime echo
+  // doesn't overwrite the already-correct local state on the saving tab.
+  const persistTasks = useCallback((tasks: Task[]) => {
+    if (!workspaceId || tasks.length === 0) return;
+    const wid = workspaceId;
+    tasks.forEach(t => {
+      recentlySavedTaskIds.current.add(t.id);
+      const { comments: _c, ...taskWithoutComments } = t as any;
+      upsertTask(wid, taskWithoutComments as Task)
+        .then(() => {
+          // Keep echo suppression active for 4s after write completes
+          setTimeout(() => recentlySavedTaskIds.current.delete(t.id), 4000);
+        })
+        .catch(err => {
+          recentlySavedTaskIds.current.delete(t.id);
+          console.error('[persistTasks] upsert failed for', t.id, err);
+        });
+    });
+  }, [workspaceId]);
 
   // Keep workspaceRef in sync so async callbacks always read fresh state
   useEffect(() => {
@@ -1181,6 +1262,7 @@ export default function Index() {
               switch (auto.action.type) {
                 case 'set_status':    if (auto.action.status)       newTask = { ...newTask, status: auto.action.status as TaskStatus }; break;
                 case 'assign_members':if (auto.action.assigneeUids?.length) newTask = { ...newTask, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] }; break;
+                case 'unassign_members': { const toRemove = auto.action.assigneeUids ?? []; const remaining = toRemove.length ? (newTask.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : []; newTask = { ...newTask, assignees: remaining, assignee: remaining[0] ?? null }; break; }
                 case 'set_priority':  if (auto.action.priority)     newTask = { ...newTask, priority: auto.action.priority as TaskPriority }; break;
                 case 'flag_task':     newTask = { ...newTask, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: autoNow } }; break;
                 case 'move_to_list':  if (auto.action.listId)       newTask = { ...newTask, listId: auto.action.listId }; break;
@@ -1196,6 +1278,7 @@ export default function Index() {
               switch (auto.action.type) {
                 case 'set_status':    if (auto.action.status)       newTask = { ...newTask, status: auto.action.status as TaskStatus }; break;
                 case 'assign_members':if (auto.action.assigneeUids?.length) newTask = { ...newTask, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] }; break;
+                case 'unassign_members': { const toRemove = auto.action.assigneeUids ?? []; const remaining = toRemove.length ? (newTask.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : []; newTask = { ...newTask, assignees: remaining, assignee: remaining[0] ?? null }; break; }
                 case 'set_priority':  if (auto.action.priority)     newTask = { ...newTask, priority: auto.action.priority as TaskPriority }; break;
                 case 'flag_task':     newTask = { ...newTask, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: autoNow } }; break;
                 case 'move_to_list':  if (auto.action.listId)       newTask = { ...newTask, listId: auto.action.listId }; break;
@@ -1578,6 +1661,62 @@ export default function Index() {
     return workspace.tasks.filter(t => t.listId === selectedListId && !t.archived);
   }, [workspace.tasks, workspace.customFields, selectedListId, searchQuery, searchIncludeArchived]);
 
+  const myOpenTaskCount = useMemo(() => {
+    if (!user) return 0;
+    return workspace.tasks.filter(t => {
+      if (t.archived || DONE_STATUSES.has(t.status)) return false;
+      const assignees = t.assignees?.length ? t.assignees : (t.assignee ? [t.assignee] : []);
+      return assignees.includes(user.uid);
+    }).length;
+  }, [workspace.tasks, user]);
+
+  const isTaskLocked = !!(taskLimitSettings && !taskLockoutOverridden && myRole !== 'owner' && myOpenTaskCount >= taskLimitSettings.limit);
+
+  // List-age lockout: if a task assigned to this user has been sitting in a
+  // list_age_lockout-targeted list longer than the threshold, lock them to
+  // only that list's tasks until they clear it.
+  const listAgeLock = useMemo(() => {
+    if (!user || myRole === 'owner' || myRole === 'admin') return null;
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const lockoutRules = allWarningRules.filter(r => r.enabled && r.rule_type === 'list_age_lockout' && (r.stale_threshold_days ?? 0) > 0);
+    for (const rule of lockoutRules) {
+      // If rule targets specific users, skip if this user is not in the list
+      const applyTo: string[] = (rule as any).apply_to_uids ?? [];
+      if (applyTo.length > 0 && !applyTo.includes(user.uid)) continue;
+
+      const scopedTasks = workspace.tasks.filter(t => {
+        if (t.archived) return false;
+        const assignees = t.assignees?.length ? t.assignees : (t.assignee ? [t.assignee] : []);
+        if (!assignees.includes(user.uid)) return false;
+        if (rule.list_id) return t.listId === rule.list_id;
+        const taskList = workspace.lists.find(l => l.id === t.listId);
+        return taskList?.parentId === rule.folder_id;
+      });
+      const overdue = scopedTasks.find(t => {
+        if (!t.createdAt) return false;
+        const days = Math.floor((Date.now() - new Date(t.createdAt).getTime()) / MS_PER_DAY);
+        return days >= (rule.stale_threshold_days as number);
+      });
+      if (overdue) {
+        const lockedListId = rule.list_id ?? overdue.listId;
+        const lockedListName = workspace.lists.find(l => l.id === lockedListId)?.name ?? 'this list';
+        return { rule, overdue, lockedListId, lockedListName };
+      }
+    }
+    return null;
+  }, [user, myRole, allWarningRules, workspace.tasks, workspace.lists]);
+
+  const visibleTasks = useMemo(() => {
+    if (listAgeLock && user) {
+      return filteredTasks.filter(t => t.listId === listAgeLock.lockedListId);
+    }
+    if (!isTaskLocked || !user) return filteredTasks;
+    return filteredTasks.filter(t => {
+      const assignees = t.assignees?.length ? t.assignees : (t.assignee ? [t.assignee] : []);
+      return assignees.includes(user.uid);
+    });
+  }, [filteredTasks, isTaskLocked, listAgeLock, user]);
+
   // CRUD handlers
   const handleCreateSpace = (name: string, icon: string) => {
     updateWorkspace({ ...workspace, spaces: [...workspace.spaces, { id: `sp${Date.now()}`, name, icon, visibleFieldIds: [] }] });
@@ -1641,6 +1780,7 @@ export default function Index() {
       switch (auto.action.type) {
         case 'set_status':    return auto.action.status ? { ...task, status: auto.action.status as TaskStatus } : task;
         case 'assign_members':return auto.action.assigneeUids?.length ? { ...task, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] } : task;
+        case 'unassign_members': { const toRemove = auto.action.assigneeUids ?? []; const remaining = toRemove.length ? (task.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : []; return { ...task, assignees: remaining, assignee: remaining[0] ?? null }; }
         case 'set_priority':  return auto.action.priority ? { ...task, priority: auto.action.priority as TaskPriority } : task;
         case 'flag_task':     return { ...task, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: now } };
         case 'move_to_list':  return auto.action.listId ? { ...task, listId: auto.action.listId } : task;
@@ -1734,18 +1874,23 @@ export default function Index() {
     if (!pending) return;
     if (taskDbSaveTimerRef.current) { clearTimeout(taskDbSaveTimerRef.current); taskDbSaveTimerRef.current = null; }
     pendingTaskSaveRef.current = null;
-    selfWriteRef.current = true;
+    // Register this task ID so the subscription echo doesn't overwrite our save.
+    const taskId = pending.task.id;
+    recentlySavedTaskIds.current.add(taskId);
     try {
-      await updateTaskInWorkspace(pending.wid, pending.task);
-      console.log('[flushPendingTaskSave] Saved:', pending.task.id);
+      // Strip comments from the task before saving — comments live in task_comments table.
+      // Keeping them in task.data would mean the tasks table and task_comments table
+      // diverge as each grows independently, and old embedded entries resurface on reload.
+      const { comments: _stripped, ...taskWithoutComments } = pending.task as any;
+      await upsertTask(pending.wid, taskWithoutComments as Task);
+      console.log('[flushPendingTaskSave] Saved:', taskId);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       console.error('[flushPendingTaskSave] Failed:', errMsg);
-      // Don't revert local state — the user's typed text stays visible.
-      // The full-workspace save (updateWorkspace) will also try to persist it.
       toast({ variant: 'destructive', title: 'Save failed', description: 'Changes are visible locally but could not reach the server. They will retry automatically.' });
     } finally {
-      setTimeout(() => { selfWriteRef.current = false; }, 1500);
+      // Clear the echo-suppression after 4s — long enough for realtime to fire.
+      setTimeout(() => { recentlySavedTaskIds.current.delete(taskId); }, 4000);
     }
   }, []);
 
@@ -1804,6 +1949,12 @@ export default function Index() {
         trackTaskStatusChanged(updated.id, updated.title, previousTask.status, updated.status);
         if (updated.status === 'completed' || updated.status === 'done') {
           trackTaskCompleted(updated.id, updated.title);
+        }
+        // Snapshot current assignees when a task is first marked done — so the
+        // staff dashboard still credits the right person even after unassignment
+        if (DONE_STATUSES.has(updated.status) && !DONE_STATUSES.has(previousTask.status) && !updated.completedBy) {
+          const snap = updated.assignees?.length ? updated.assignees : (updated.assignee ? [updated.assignee] : []);
+          if (snap.length > 0) taskWithActivity = { ...taskWithActivity, completedBy: snap };
         }
       }
       // Title
@@ -1953,6 +2104,14 @@ export default function Index() {
 
       if (activityEntries.length > 0) {
         taskWithActivity = { ...taskWithActivity, comments: [...(updated.comments || []), ...activityEntries] };
+        // Also insert each system entry into task_comments table so other users
+        // see activity live via subscription (fire-and-forget, non-blocking).
+        if (workspaceId) {
+          for (const entry of activityEntries) {
+            sbInsertComment(workspaceId, updated.id, entry as unknown as Record<string, unknown>)
+              .catch(e => console.warn('[handleUpdateTask] system entry insert failed:', e));
+          }
+        }
       }
     }
     // ────────────────────────────────────────────────────────────────────────
@@ -1962,6 +2121,7 @@ export default function Index() {
       switch (auto.action.type) {
         case 'set_status':    return auto.action.status ? { ...task, status: auto.action.status as TaskStatus } : task;
         case 'assign_members':return auto.action.assigneeUids?.length ? { ...task, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] } : task;
+        case 'unassign_members': { const toRemove = auto.action.assigneeUids ?? []; const remaining = toRemove.length ? (task.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : []; return { ...task, assignees: remaining, assignee: remaining[0] ?? null }; }
         case 'set_priority':  return auto.action.priority ? { ...task, priority: auto.action.priority as TaskPriority } : task;
         case 'flag_task':     return { ...task, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: now } };
         case 'move_to_list':  return auto.action.listId ? { ...task, listId: auto.action.listId } : task;
@@ -2038,16 +2198,29 @@ export default function Index() {
     // pop the task detail open unexpectedly.
     setSelectedTask((prev) => (prev && prev.id === taskWithActivity.id) ? taskWithActivity : prev);
 
-    // Queue the task for DB write — flushed when the panel closes (or after 5s
-    // of inactivity as a fallback). This collapses all keystrokes into one RPC
-    // call instead of hammering Supabase on every character typed.
-    // Local state already reflects the latest value — we never revert it on a
-    // save failure so the user doesn't lose typed text.
+    // Structural changes (list move, status, assignee, priority) must reach the
+    // DB immediately — any incoming realtime event during a 5s debounce window
+    // would re-fetch stale state and visually revert the move. Text-only edits
+    // (title, description, custom field text) are safe to debounce because they
+    // don't trigger Kanban/board position changes visible to other users.
+    const isStructuralChange = previousTask && (
+      previousTask.listId !== updated.listId ||
+      previousTask.status !== updated.status ||
+      previousTask.assignee !== updated.assignee ||
+      previousTask.priority !== updated.priority ||
+      JSON.stringify(previousTask.assignees) !== JSON.stringify(updated.assignees)
+    );
+
     if (workspaceId) {
       if (taskDbSaveTimerRef.current) clearTimeout(taskDbSaveTimerRef.current);
       pendingTaskSaveRef.current = { wid: workspaceId, task: taskWithActivity };
-      // 5-second idle fallback — saves even if the panel stays open
-      taskDbSaveTimerRef.current = setTimeout(() => flushPendingTaskSave(), 5000);
+      if (isStructuralChange) {
+        // Flush immediately — no debounce for moves/status/assignee changes
+        flushPendingTaskSave();
+      } else {
+        // Debounce text edits to collapse keystrokes into one RPC call
+        taskDbSaveTimerRef.current = setTimeout(() => flushPendingTaskSave(), 5000);
+      }
     }
 
     // Log task update for audit trail
@@ -2092,6 +2265,7 @@ export default function Index() {
           switch (auto.action.type) {
             case 'set_status':    return auto.action.status ? { ...t, status: auto.action.status as TaskStatus } : t;
             case 'assign_members':return auto.action.assigneeUids?.length ? { ...t, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] } : t;
+            case 'unassign_members': { const toRemove = auto.action.assigneeUids ?? []; const remaining = toRemove.length ? (t.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : []; return { ...t, assignees: remaining, assignee: remaining[0] ?? null }; }
             case 'set_priority':  return auto.action.priority ? { ...t, priority: auto.action.priority as TaskPriority } : t;
             case 'flag_task':     return { ...t, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: now } };
             case 'move_to_list':  return auto.action.listId ? { ...t, listId: auto.action.listId } : t;
@@ -2100,8 +2274,10 @@ export default function Index() {
         });
       }
     }
+    const changedTasks = tasks.filter((t, i) => t !== current.tasks[i]);
     updateWorkspace({ ...current, lists: updatedLists, tasks });
-  }, [updateWorkspace]);
+    persistTasks(changedTasks);
+  }, [updateWorkspace, persistTasks]);
 
   const handleApplyAutomationToExisting = useCallback((auto: Automation): number => {
     const current = workspaceRef.current;
@@ -2115,6 +2291,7 @@ export default function Index() {
       switch (auto.action.type) {
         case 'set_status':    return auto.action.status ? { ...task, status: auto.action.status as TaskStatus } : task;
         case 'assign_members':return auto.action.assigneeUids?.length ? { ...task, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] } : task;
+        case 'unassign_members': { const toRemove = auto.action.assigneeUids ?? []; const remaining = toRemove.length ? (task.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : []; return { ...task, assignees: remaining, assignee: remaining[0] ?? null }; }
         case 'set_priority':  return auto.action.priority ? { ...task, priority: auto.action.priority as TaskPriority } : task;
         case 'flag_task':     return { ...task, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: now } };
         case 'move_to_list':  return auto.action.listId ? { ...task, listId: auto.action.listId } : task;
@@ -2123,15 +2300,17 @@ export default function Index() {
     });
     const updatedById = Object.fromEntries(updatedTasks.map(t => [t.id, t]));
     updateWorkspace({ ...current, tasks: current.tasks.map(t => updatedById[t.id] ?? t) });
+    persistTasks(updatedTasks);
     return updatedTasks.length;
-  }, [updateWorkspace]);
+  }, [updateWorkspace, persistTasks]);
 
   // Batch-update multiple tasks at once (used by re-compressor to avoid race conditions)
   const handleBatchUpdateTasks = useCallback((updatedTasks: Task[]) => {
     const current = workspaceRef.current;
     const updatedById = Object.fromEntries(updatedTasks.map(t => [t.id, t]));
     updateWorkspace({ ...current, tasks: current.tasks.map(t => updatedById[t.id] ?? t) });
-  }, [updateWorkspace]);
+    persistTasks(updatedTasks);
+  }, [updateWorkspace, persistTasks]);
 
   // Sweep all start_date_overdue automations across the workspace
   const runDateAutomations = useCallback(() => {
@@ -2151,6 +2330,12 @@ export default function Index() {
           if (!auto.action.assigneeUids?.length) return task;
           if (JSON.stringify(task.assignees) === JSON.stringify(auto.action.assigneeUids)) return task;
           return { ...task, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] };
+        case 'unassign_members': {
+          const toRemove = auto.action.assigneeUids ?? [];
+          const remaining = toRemove.length ? (task.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : [];
+          if (JSON.stringify(task.assignees) === JSON.stringify(remaining)) return task;
+          return { ...task, assignees: remaining, assignee: remaining[0] ?? null };
+        }
         case 'set_priority':
           if (!auto.action.priority || task.priority === auto.action.priority) return task;
           return { ...task, priority: auto.action.priority as TaskPriority };
@@ -2181,8 +2366,12 @@ export default function Index() {
       }
     }
 
-    if (changed) updateWorkspace({ ...current, tasks });
-  }, [updateWorkspace]);
+    if (changed) {
+      const changedTasks = tasks.filter((t, i) => t !== current.tasks[i]);
+      updateWorkspace({ ...current, tasks });
+      persistTasks(changedTasks);
+    }
+  }, [updateWorkspace, persistTasks]);
 
   // Run date automations on load and then every 5 minutes
   useEffect(() => {
@@ -2504,25 +2693,35 @@ export default function Index() {
   };
 
   const handleArchiveAllInStatus = (statusId: string) => {
+    const changed = workspace.tasks
+      .filter(t => t.status === statusId && t.listId === selectedListId)
+      .map(t => ({ ...t, archived: true }));
     updateWorkspace({
       ...workspace,
       tasks: workspace.tasks.map(t =>
         t.status === statusId && t.listId === selectedListId ? { ...t, archived: true } : t
       ),
     });
+    persistTasks(changed);
   };
 
   const handleArchiveTask = useCallback((taskId: string) => {
+    const t = workspace.tasks.find(t => t.id === taskId);
     updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => t.id === taskId ? { ...t, archived: true } : t) });
-  }, [workspace]);
+    if (t) persistTasks([{ ...t, archived: true }]);
+  }, [workspace, persistTasks]);
 
   const handleUnarchiveTask = useCallback((taskId: string) => {
+    const t = workspace.tasks.find(t => t.id === taskId);
     updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => t.id === taskId ? { ...t, archived: false } : t) });
-  }, [workspace]);
+    if (t) persistTasks([{ ...t, archived: false }]);
+  }, [workspace, persistTasks]);
 
   const handleUnarchiveAll = useCallback(() => {
+    const changed = workspace.tasks.filter(t => t.archived).map(t => ({ ...t, archived: false }));
     updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ({ ...t, archived: false })) });
-  }, [workspace]);
+    persistTasks(changed);
+  }, [workspace, persistTasks]);
 
   // ── Bulk / multi-select handlers ─────────────────────────────────────────
   const handleToggleSelect = useCallback((id: string) => {
@@ -2592,16 +2791,20 @@ export default function Index() {
   const handleArchiveSelected = useCallback(() => {
     const ids = Array.from(selectedTaskIds);
     if (ids.length === 0) return;
+    const changedTasks = workspace.tasks.filter(t => ids.includes(t.id)).map(t => ({ ...t, archived: true }));
     updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, archived: true } : t) });
+    persistTasks(changedTasks);
     setSelectedTaskIds(new Set());
-  }, [selectedTaskIds, workspace]);
+  }, [selectedTaskIds, workspace, persistTasks]);
 
   const handleBulkStatusChange = useCallback((status: string) => {
     const ids = Array.from(selectedTaskIds);
     if (ids.length === 0) return;
+    const changedTasks = workspace.tasks.filter(t => ids.includes(t.id)).map(t => ({ ...t, status: status as TaskStatus }));
     updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, status: status as TaskStatus } : t) });
+    persistTasks(changedTasks);
     setSelectedTaskIds(new Set());
-  }, [selectedTaskIds, workspace]);
+  }, [selectedTaskIds, workspace, persistTasks]);
 
   const handleBulkMoveToList = useCallback((targetListId: string) => {
     const ids = Array.from(selectedTaskIds);
@@ -2615,9 +2818,11 @@ export default function Index() {
     const targetList = workspace.lists.find(l => l.id === targetListId);
     const targetStatuses = targetList?.customStatuses?.length ? targetList.customStatuses : DEFAULT_STATUSES;
     const firstStatus = targetStatuses[0]?.id || 'to_do';
+    const movedTasks = selectedTasks.map(t => ({ ...t, listId: targetListId, status: firstStatus as TaskStatus }));
     updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, listId: targetListId, status: firstStatus as TaskStatus } : t) });
+    persistTasks(movedTasks);
     setSelectedTaskIds(new Set());
-  }, [selectedTaskIds, workspace, toast]);
+  }, [selectedTaskIds, workspace, toast, persistTasks]);
 
   const handleDuplicateTask = (task: Task) => {
     const newTask: Task = {
@@ -2629,6 +2834,7 @@ export default function Index() {
       comments: [],
     };
     updateWorkspace({ ...workspace, tasks: [...workspace.tasks, newTask] });
+    persistTasks([newTask]);
   };
 
   // Rename handlers
@@ -2833,6 +3039,7 @@ export default function Index() {
           onOpenOutstandingRepairs={() => { closeAllOverlays(); setShowOutstandingRepairs(true); }}
           onOpenDataSheets={() => { closeAllOverlays(); setShowDataSheets(true); }}
           onOpenActivityReports={() => { closeAllOverlays(); setShowActivityReports(true); }}
+          onOpenAuditLog={() => { closeAllOverlays(); setShowAuditLog(true); }}
           onOpenStaffDashboard={() => { closeAllOverlays(); setShowStaffDashboard(true); }}
           onOpenTaskCreationList={() => { closeAllOverlays(); setShowTaskCreationList(true); }}
           onOpenSalesOverview={() => { closeAllOverlays(); setShowSalesOverview(true); }}
@@ -2844,10 +3051,11 @@ export default function Index() {
           onOpenBusinessPlanning={() => { closeAllOverlays(); setShowBusinessPlanning(true); }}
           onOpenEcommerceOperations={() => { closeAllOverlays(); setShowEcommerceOperations(true); }}
           onOpenEcommerceAnalytics={() => { closeAllOverlays(); setShowEcommerceAnalytics(true); }}
-          onOpenWalkInSale={() => { window.open('/store?walkin=1', '_blank', 'noopener,noreferrer'); }}
+          onOpenWalkInSale={() => { closeAllOverlays(); setShowWalkInSale(true); }}
           onCaptureExpenseSlip={() => { closeAllOverlays(); setExpenseSlipInitialAction('camera'); setShowExpenseSlips(true); }}
           onDropTask={handleMoveTask}
           onOpenSalesSettings={() => setShowSalesSettings(true)}
+          onOpenTaskLimitSettings={() => setShowTaskLimitSettings(true)}
           onOpenPrinter={() => setShowPrinter(true)}
           onOpenActivityMonitor={() => setShowActivityMonitor(true)}
           onOpenWhatsAppLogs={() => setShowWhatsAppLogs(true)}
@@ -3015,7 +3223,7 @@ export default function Index() {
                     <div className="px-4 py-2 bg-muted/30 border-b text-sm text-muted-foreground">
                       <div className="flex items-center justify-between gap-3">
                         <span>
-                          {filteredTasks.length} {filteredTasks.length === 1 ? 'result' : 'results'} for &ldquo;{searchQuery}&rdquo; across all lists
+                          {visibleTasks.length} {visibleTasks.length === 1 ? 'result' : 'results'} for &ldquo;{searchQuery}&rdquo; across all lists
                         </span>
                         <button
                           onClick={() => setSearchIncludeArchived(v => !v)}
@@ -3047,6 +3255,63 @@ export default function Index() {
                     </div>
                   )}
                   
+                  {/* Task Limit Lockout Banner */}
+                  {taskLimitSettings && myRole !== 'owner' && (
+                    <div className={`px-4 py-3 border-b shrink-0 ${isTaskLocked ? "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800" : "bg-amber-50 border-amber-200 dark:bg-amber-950/20 dark:border-amber-800"}`}>
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex items-start gap-2.5">
+                          <span className={`text-lg leading-none mt-0.5 ${isTaskLocked ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
+                            {isTaskLocked ? "🔒" : "⚠️"}
+                          </span>
+                          <div>
+                            <div className={`font-semibold text-sm ${isTaskLocked ? "text-red-700 dark:text-red-400" : "text-amber-800 dark:text-amber-300"}`}>
+                              {myOpenTaskCount} / {taskLimitSettings.limit} open tasks
+                              {isTaskLocked ? " — You are locked out" : ""}
+                            </div>
+                            {isTaskLocked && (
+                              <div className="text-xs mt-0.5 text-red-600 dark:text-red-400">
+                                I have locked you out of all other tasks. You have reached your tolerance limit — please complete and close your assigned tasks to regain full access.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {isTaskLocked && taskLimitSettings.override_code && !taskLockoutOverridden && (
+                          <button
+                            onClick={() => { setOverrideInput(""); setShowOverrideDialog(true); }}
+                            className="text-xs px-3 py-1 rounded-full border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors whitespace-nowrap"
+                          >
+                            Enter override code
+                          </button>
+                        )}
+                        {taskLockoutOverridden && (
+                          <button
+                            onClick={() => setTaskLockoutOverridden(false)}
+                            className="text-xs px-3 py-1 rounded-full border border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors whitespace-nowrap"
+                          >
+                            Override active — click to cancel
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* List Age Lockout Banner */}
+                  {listAgeLock && (
+                    <div className="px-4 py-3 border-b shrink-0 bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800">
+                      <div className="flex items-start gap-2.5">
+                        <span className="text-lg leading-none mt-0.5 text-red-600 dark:text-red-400">🔒</span>
+                        <div>
+                          <div className="font-semibold text-sm text-red-700 dark:text-red-400">
+                            Locked to {listAgeLock.lockedListName} — overdue task
+                          </div>
+                          <div className="text-xs mt-0.5 text-red-600 dark:text-red-400">
+                            <strong>{listAgeLock.overdue.title}</strong> has been sitting in {listAgeLock.lockedListName} too long. Clear it first before working on anything else.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Task Views */}
                   <div className="flex-1 overflow-hidden relative">
                     {/* Floating bulk action bar — shown in list view when tasks are selected */}
@@ -3100,7 +3365,7 @@ export default function Index() {
                     )}
                     {viewMode === "board" ? (
                       <TaskBoardView
-                        tasks={filteredTasks}
+                        tasks={visibleTasks}
                         visibleFields={visibleFields}
                         customStatuses={workspace.lists.find(l => l.id === selectedListId)?.customStatuses}
                         onSelectTask={handleOpenTask}
@@ -3125,10 +3390,12 @@ export default function Index() {
                         onUnarchiveTask={handleUnarchiveTask}
                         onUnarchiveAll={handleUnarchiveAll}
                         onUpdateTask={handleUpdateTask}
+                        lockedListId={listAgeLock?.lockedListId}
+                        staleThresholdDays={listAgeLock?.rule?.stale_threshold_days as number | undefined}
                       />
                     ) : (
                       <TaskListView
-                        tasks={filteredTasks}
+                        tasks={visibleTasks}
                         visibleFields={visibleFields}
                         customStatuses={workspace.lists.find(l => l.id === selectedListId)?.customStatuses}
                         onSelectTask={handleOpenTask}
@@ -3181,6 +3448,9 @@ export default function Index() {
           {showInventory && (
             <InventoryPage onClose={() => setShowInventory(false)} />
           )}
+          {showWalkInSale && (
+            <WalkInSalePage onClose={() => setShowWalkInSale(false)} />
+          )}
           {showStockMovements && (
             <div className="absolute inset-0 z-30 bg-background overflow-y-auto">
               <div className="relative">
@@ -3201,6 +3471,7 @@ export default function Index() {
               onClose={() => { setShowQuotations(false); setInitialQuotationId(undefined); }}
               initialQuotationId={initialQuotationId}
               onQuotationDeleted={(quotationId) => {
+                const changed = workspace.tasks.filter(t => t.linkedQuotationId === quotationId).map(t => ({ ...t, linkedQuotationId: undefined }));
                 updateWorkspace({
                   ...workspace,
                   tasks: workspace.tasks.map(t =>
@@ -3209,6 +3480,7 @@ export default function Index() {
                       : t
                   ),
                 });
+                persistTasks(changed);
               }}
             />
           )}
@@ -3245,6 +3517,11 @@ export default function Index() {
           )}
           {showDataSheets && (
             <DataSheetsPage />
+          )}
+          {showAuditLog && (
+            <AuditLogPage
+              onClose={() => setShowAuditLog(false)}
+            />
           )}
           {showActivityReports && (
             <ActivityReportPage
@@ -3556,6 +3833,78 @@ export default function Index() {
           open={showSalesSettings}
           onClose={() => setShowSalesSettings(false)}
         />
+
+        {/* Task Limit Settings Dialog */}
+        <TaskLimitSettingsDialog
+          open={showTaskLimitSettings}
+          onClose={() => {
+            setShowTaskLimitSettings(false);
+            if (workspaceId) loadTaskLimitSettings(workspaceId).then(s => setTaskLimitSettings(s && s.limit > 0 ? s : null));
+          }}
+          lists={workspace.lists
+            .filter(l => l.parentType === "folder")
+            .map(l => ({
+              id: l.id,
+              name: l.name,
+              folderId: l.parentId,
+              folderName: workspace.folders.find(f => f.id === l.parentId)?.name,
+            }))}
+          members={members.filter(m => m.role !== 'owner').map(m => ({
+            uid: m.uid,
+            displayName: m.displayName,
+            email: m.email,
+          }))}
+        />
+
+        {/* Task Lockout Override Dialog */}
+        {showOverrideDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+            <div className="bg-background border border-border rounded-lg shadow-xl p-6 w-80 space-y-4">
+              <div className="font-semibold text-base flex items-center gap-2">
+                <span>🔓</span> Enter Override Code
+              </div>
+              <p className="text-sm text-muted-foreground">Enter the admin override code to temporarily restore full task visibility for this session.</p>
+              <input
+                type="text"
+                autoFocus
+                className="w-full border border-border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary"
+                placeholder="Override code"
+                value={overrideInput}
+                onChange={e => setOverrideInput(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    if (overrideInput.trim() === taskLimitSettings?.override_code) {
+                      setTaskLockoutOverridden(true);
+                      setShowOverrideDialog(false);
+                      setOverrideInput("");
+                    } else {
+                      setOverrideInput("");
+                    }
+                  }
+                  if (e.key === 'Escape') setShowOverrideDialog(false);
+                }}
+              />
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => setShowOverrideDialog(false)}
+                  className="px-3 py-1.5 text-sm rounded border border-border hover:bg-accent transition-colors"
+                >Cancel</button>
+                <button
+                  onClick={() => {
+                    if (overrideInput.trim() === taskLimitSettings?.override_code) {
+                      setTaskLockoutOverridden(true);
+                      setShowOverrideDialog(false);
+                      setOverrideInput("");
+                    } else {
+                      setOverrideInput("");
+                    }
+                  }}
+                  className="px-3 py-1.5 text-sm rounded bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+                >Unlock</button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Status Manager Dialog */}
         {showStatusManager && (

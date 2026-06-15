@@ -5,7 +5,7 @@ import { exportWorkspaceToZip, type ExportProgress, type ExportOptions, DEFAULT_
 
 import {
   ChevronDown, ChevronRight, Plus,
-  Folder as FolderIcon, FileText, Users, Lock, LogOut, MessageSquare, DollarSign, Clock, BarChart3, BarChart2, Mail, Wrench, Printer, Package, Receipt, TrendingUp, FileSpreadsheet, Store, Building2, Settings, ExternalLink, CreditCard, Map, KeyRound, AlertCircle, Camera, TableProperties, Landmark, ArrowLeftRight, Activity, PieChart, FolderOpen, Bot, Sparkles, EyeOff, Sun, Moon, SunMoon, Bell, Zap, Upload, Download, CheckCircle, XCircle,
+  Folder as FolderIcon, FileText, Users, Lock, LogOut, MessageSquare, DollarSign, Clock, BarChart3, BarChart2, Mail, Wrench, Printer, Package, Receipt, TrendingUp, FileSpreadsheet, Store, Building2, Settings, ExternalLink, CreditCard, Map, KeyRound, AlertCircle, Camera, TableProperties, Landmark, ArrowLeftRight, Activity, PieChart, FolderOpen, Bot, Sparkles, EyeOff, Sun, Moon, SunMoon, Bell, Zap, Upload, Download, CheckCircle, XCircle, ShieldAlert,
   ShoppingBag as ShoppingBagIcon,
 } from "lucide-react";
 import {
@@ -86,6 +86,7 @@ interface CrmSidebarProps {
   onOpenIkhokhaJobSettings: () => void;
   onOpenJobSettings: () => void;
   onOpenSupervisorPassword: () => void;
+  onOpenTaskLimitSettings?: () => void;
   onOpenFieldMapper: () => void;
   onShowTaskRecovery?: () => void;
   onFolderOverview?: (folderId: string) => void;
@@ -97,6 +98,7 @@ interface CrmSidebarProps {
   onDropTask?: (taskId: string, listId: string) => void;
   onOpenNotifications: () => void;
   onOpenSetupWizard?: () => void;
+  onOpenAuditLog?: () => void;
 }
 
 export function CrmSidebar({
@@ -105,7 +107,7 @@ export function CrmSidebar({
   onRenameSpace, onRenameFolder, onRenameList,
   onDeleteSpace, onDeleteFolder, onDeleteList,
   onOpenCustomFields, onTaskStatuses, onOpenForms, onOpenAccounts,
-  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard,
+  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog,
 }: CrmSidebarProps) {
   const { state } = useSidebar();
   const {
@@ -961,7 +963,7 @@ export function CrmSidebar({
           )}
 
           {/* ── AI Bot Warnings ── */}
-          {hasPermission("warnings") && !moduleHidden("ai_bot_warnings") && (
+          {(isSystemAdmin || isOwner) && hasPermission("warnings") && !moduleHidden("ai_bot_warnings") && (
             <FlyoutGroup
               icon={<Bot className="h-4 w-4 shrink-0 text-purple-400" />}
               label="AI Bot Warnings"
@@ -1057,6 +1059,7 @@ export function CrmSidebar({
                 {hasPermission("whatsapp") && !moduleHidden("whatsapp") && <FlyoutItem icon={<Clock className="h-4 w-4 text-green-300" />} label="WA Logs" onClick={onOpenWhatsAppLogs} />}
                 {hasPermission("printer") && !moduleHidden("printer") && <FlyoutItem icon={<Printer className="h-4 w-4 text-blue-400" />} label="Printer" onClick={onOpenPrinter} />}
                 <FlyoutItem icon={<Clock className="h-4 w-4 text-sidebar-foreground/60" />} label="Activity" onClick={onOpenActivityMonitor} />
+                {(isSystemAdmin || isOwner) && onOpenAuditLog && <FlyoutItem icon={<ShieldAlert className="h-4 w-4 text-indigo-400" />} label="Audit Log" onClick={onOpenAuditLog} />}
                 <FlyoutItem icon={<FileText className="h-4 w-4 text-sidebar-foreground/60" />} label="Forms" onClick={onOpenForms} />
                 <FlyoutItem icon={<DollarSign className="h-4 w-4 text-sidebar-foreground/60" />} label="Accounts" onClick={onOpenAccounts} />
                 <FlyoutItem icon={<Mail className="h-4 w-4 text-sidebar-foreground/60" />} label="Email Settings" onClick={onOpenEmailSettings} />
@@ -1067,6 +1070,8 @@ export function CrmSidebar({
                 {(isSystemAdmin || isOwner) && <FlyoutItem icon={<Store className="h-4 w-4 text-sidebar-foreground/60" />} label="Ecommerce" onClick={onOpenEcommerceSettings} />}
                 {(isSystemAdmin || isOwner) && onOpenEcommercePayments && <FlyoutItem icon={<CreditCard className="h-4 w-4 text-green-400" />} label="Ecommerce Payment" onClick={onOpenEcommercePayments} />}
                 {onOpenEcommerceBot && <FlyoutItem icon={<Sparkles className="h-4 w-4 text-cyan-400" />} label="Ecommerce Bot" onClick={onOpenEcommerceBot} />}
+                {(isSystemAdmin || isOwner) && onOpenTaskLimitSettings && <FlyoutItem icon={<ShieldAlert className="h-4 w-4 text-orange-500" />} label="Task Limits" onClick={onOpenTaskLimitSettings} />}
+                {(isSystemAdmin || isOwner) && <FlyoutItem icon={<Bot className="h-4 w-4 text-purple-400" />} label="Warning Rules" onClick={() => setShowAIBotWarning(true)} />}
                 <FlyoutItem icon={<Camera className="h-4 w-4 text-orange-400" />} label="Job Settings" onClick={onOpenJobSettings} />
                 <FlyoutItem icon={<CreditCard className="h-4 w-4 text-green-400" />} label="iKhokha (CRM Jobs)" onClick={onOpenIkhokhaJobSettings} />
                 <FlyoutItem icon={<Map className="h-4 w-4 text-amber-400" />} label="Field Mapper" onClick={onOpenFieldMapper} />
@@ -1685,6 +1690,20 @@ function FlyoutGroup({
       }
     };
   }, [open, flyoutId]);
+
+  // Close flyout on any click outside the trigger or panel (catches dialog opens too)
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      const tr = triggerRef.current;
+      const pr = panelRef.current;
+      if (tr && tr.contains(e.target as Node)) return;
+      if (pr && pr.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick, true);
+    return () => document.removeEventListener('mousedown', onClick, true);
+  }, [open]);
 
   // Global mousemove: close only when cursor is outside BOTH trigger and panel.
   // Throttled to one check per animation frame to avoid layout thrashing.
