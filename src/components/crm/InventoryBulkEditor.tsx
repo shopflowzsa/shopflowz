@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   X, Search, Image as ImageIcon, ChevronLeft, ChevronRight,
   Save, RefreshCw, Check, AlertCircle, Loader2, ArrowUpDown, Trash2,
-  Globe, Wand2, SkipForward, Settings2, ExternalLink,
+  Globe, Wand2, SkipForward, Settings2, ExternalLink, Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -558,6 +558,38 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
 
   const dirtyCount = dirty.size;
 
+  function exportCsv() {
+    const headers = ["Name", "SKU", "Category", "Status", "Price", "Cost", "Qty", "Reorder", "Supplier", "Location", "Barcode", "Description"];
+    const rowsToExport = selectedRows.size > 0
+      ? filteredRows.filter(r => selectedRows.has(r.id))
+      : filteredRows;
+    const csvRows = [
+      headers,
+      ...rowsToExport.map(r => [
+        r.name,
+        r.sku ?? "",
+        r.category ?? "",
+        r.status ?? "",
+        r.price ?? 0,
+        r.costPrice ?? 0,
+        r.quantity ?? 0,
+        r.reorderLevel ?? 0,
+        r.supplier ?? "",
+        r.location ?? "",
+        (r as any).barcode ?? "",
+        r.description ?? "",
+      ]),
+    ];
+    const csv = csvRows.map(row => row.map(c => `"${String(c).replace(/"/g, '""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `inventory-export.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className={embedded ? "flex flex-col h-full" : "fixed inset-0 z-50 flex flex-col bg-background"}>
       {/* Hidden file input */}
@@ -611,6 +643,10 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
               <Save className="h-4 w-4" />
               Save Changes{dirtyCount > 0 ? ` (${dirtyCount})` : ""}
             </Button>
+            <Button size="sm" variant="outline" onClick={exportCsv} className="gap-1.5">
+              <Download className="h-4 w-4" />
+              Export CSV{selectedRows.size > 0 ? ` (${selectedRows.size})` : ""}
+            </Button>
             <Button size="sm" variant="outline" onClick={() => loadItems()} className="gap-1.5">
               <RefreshCw className="h-4 w-4" />
               Refresh
@@ -640,6 +676,10 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
             <Button size="sm" variant="outline" onClick={() => loadItems()} className="gap-1.5 shrink-0">
               <RefreshCw className="h-4 w-4" />
               Refresh
+            </Button>
+            <Button size="sm" variant="outline" onClick={exportCsv} className="gap-1.5 shrink-0">
+              <Download className="h-4 w-4" />
+              Export CSV{selectedRows.size > 0 ? ` (${selectedRows.size})` : ""}
             </Button>
             {dirtyCount > 0 && (
               <span className="text-xs text-amber-600 font-medium">
