@@ -393,12 +393,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user_metadata: { displayName, user_type: userType },
     });
     if (error) throw error;
+    // Save extra profile fields (phone, address) that resolveWorkspace doesn't capture.
+    // Errors here are non-fatal — the user can still log in and workspace will be created.
     if (data.user) {
-      await supabaseServiceRole.from("user_profiles").upsert({
-        id: data.user.id, email, display_name: displayName, phone, address,
+      supabaseServiceRole.from("user_profiles").upsert({
+        id: data.user.id, email, display_name: displayName, phone: phone || null, address: address || null,
         created_at: new Date().toISOString(),
-      });
+      }).then(({ error: e }) => { if (e) console.warn("[register] profile upsert:", e.message); });
     }
+    // admin.createUser does NOT sign the user in — do it explicitly so onAuthStateChange
+    // fires and resolveWorkspace creates the workspace + redirects the user.
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+    if (signInError) throw signInError;
   }
 
   async function createGuestSession(): Promise<void> {
