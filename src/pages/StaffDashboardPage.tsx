@@ -116,43 +116,30 @@ function buildStats(staffStats: { uid: string; name: string; overdue: number; in
 }
 
 const AWARDS: AwardConfig[] = [
-  { icon: "🏆", title: "Top Dog",            subtitle: "most done this week",              color: "text-yellow-500 bg-yellow-500/10 border-yellow-500/30",  getValue: s => s.doneWeek,           winner: 'high' },
-  { icon: "🪦", title: "Human Paperweight",  subtitle: "most overdue — still breathing?",  color: "text-red-500 bg-red-500/10 border-red-500/30",           getValue: s => s.overdue,            winner: 'high' },
-  { icon: "🦥", title: "I'll Do It Later",   subtitle: "oldest overdue — days of excuses", color: "text-orange-500 bg-orange-500/10 border-orange-500/30",  getValue: s => s.oldestOverdueDays,  winner: 'high' },
-  { icon: "🔥", title: "Dumpster Fire",      subtitle: "most urgent tasks — send help",    color: "text-orange-600 bg-orange-500/10 border-orange-500/30",  getValue: s => s.urgent + s.overdue, winner: 'high' },
-  { icon: "😱", title: "Backlog Hoarder",    subtitle: "biggest pile of untouched tasks",  color: "text-violet-500 bg-violet-500/10 border-violet-500/30",  getValue: s => s.toDo + s.review,    winner: 'high' },
+  { icon: "🏆", title: "Star of the Week",   subtitle: "most done this week",           color: "text-yellow-500 bg-yellow-500/10 border-yellow-500/30",  getValue: s => s.doneWeek,           winner: 'high' },
+  { icon: "⚡", title: "Most Urgent Focus",  subtitle: "tackling the toughest jobs",    color: "text-orange-500 bg-orange-500/10 border-orange-500/30",  getValue: s => s.urgent + s.overdue, winner: 'high' },
+  { icon: "🎯", title: "Needs a Push",       subtitle: "overdue — time to clear them",  color: "text-red-500 bg-red-500/10 border-red-500/30",           getValue: s => s.overdue,            winner: 'high' },
+  { icon: "💪", title: "Heavy Lifter",       subtitle: "biggest open workload",         color: "text-blue-500 bg-blue-500/10 border-blue-500/30",        getValue: s => s.toDo + s.review,    winner: 'high' },
+  { icon: "🕐", title: "Longest Pending",    subtitle: "oldest job — let's close it",   color: "text-violet-500 bg-violet-500/10 border-violet-500/30",  getValue: s => s.oldestOverdueDays,  winner: 'high' },
 ];
 
-// Rotating insults shown on negative award badges
-const ROTATING_INSULTS = [
-  // Classic accountability
-  "you're holding the other staff members back",
-  "you're putting the business at risk",
-  "time is money — the longer you delay, the less business there'll be left",
-  "the longer you delay, the less chance your job will still be here",
-  "a baby can work faster than you",
-  "at this rate the lights will be off before you finish",
-  "put your phone away and do your actual job",
-  "your backlog called — it wants you to actually work",
-  "every task you ignore is money walking out the door",
-  "the rest of the team is waiting on YOU",
-  "your excuses aren't paying the bills",
-  "management is watching — and it's not looking great",
-  // Repair-shop delay tactics called out
-  "still 'waiting on a part' that arrived last Tuesday?",
-  "how many tea breaks does one job need?",
-  "browsing Takealot won't fix that amp",
-  "the customer called AGAIN — what do you tell them?",
-  "'I'll do it now' was three days ago",
-  "that job isn't going to diagnose itself",
-  "scrolling your phone isn't a repair technique",
-  "the customer is sitting at home worried — you're here doing nothing",
-  "if you moved as fast as your excuses, we'd be ahead",
-  "'I was busy' — busy doing what exactly?",
-  "every overdue job is a customer who won't come back",
-  "the bench doesn't fix jobs, YOU do — so go do it",
-  "another day, another excuse — try a different approach: WORK",
-  "that job has been on your bench longer than some staff have worked here",
+// Rotating motivational messages shown when someone has the most pending work
+const ROTATING_MOTIVATION = [
+  "every job you close is a happy customer who comes back — let's get it done!",
+  "you've got this — tackle one job at a time and watch the list shrink",
+  "customers are counting on you — finishing strong today makes tomorrow easier",
+  "great technicians don't just fix devices, they build trust — close that job!",
+  "one more job done means one more 5-star review for the team",
+  "you're the reason customers choose to come back — keep pushing!",
+  "clear that backlog and feel the difference — progress beats perfection",
+  "the best feeling is a job marked done — go create that feeling",
+  "every repair you complete puts money in everyone's pocket",
+  "small steps every hour add up to a big day — what's next on the bench?",
+  "the team has your back — let's all finish strong today",
+  "customers waiting = opportunity to impress — go make their day",
+  "your skills are what keep this shop running — use them!",
+  "done is better than perfect — get it closed and move forward",
+  "each completed job is proof of what you're capable of",
 ];
 
 interface BarRowData { name: string; value: number; i: number }
@@ -198,10 +185,10 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
   const [sortField, setSortField] = useState<"name" | "overdue" | "inProgress" | "doneWeek" | "urgent">("overdue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedStaff, setSelectedStaff] = useState<string | null>(null);
-  const [insultIdx, setInsultIdx] = useState(0);
+  const [motivationIdx, setMotivationIdx] = useState(0);
 
   useEffect(() => {
-    const t = setInterval(() => setInsultIdx(i => (i + 1) % ROTATING_INSULTS.length), 3500);
+    const t = setInterval(() => setMotivationIdx(i => (i + 1) % ROTATING_MOTIVATION.length), 4000);
     return () => clearInterval(t);
   }, []);
 
@@ -213,11 +200,14 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
     [workspace.tasks]
   );
 
-  // Resolve all unique staff UIDs across active tasks
+  // Resolve all unique staff UIDs across active tasks (include completedBy so recently-done staff appear)
   const allStaffUids = useMemo(() => {
     const seen = new Set<string>();
     for (const t of activeTasks) {
       for (const uid of getTaskAssignees(t)) seen.add(uid);
+      if (DONE_STATUSES.has(t.status) && t.completedBy?.length) {
+        for (const uid of t.completedBy) seen.add(uid);
+      }
     }
     return [...seen];
   }, [activeTasks]);
@@ -261,15 +251,15 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
     };
 
     for (const t of activeTasks) {
-      const uids = getTaskAssignees(t);
-      if (uids.length === 0) continue;
+      const isDone = DONE_STATUSES.has(t.status);
+      const currentUids = getTaskAssignees(t);
 
-      for (const uid of uids) {
-        init(uid);
-        stats[uid].tasks.push(t);
-        const isDone = DONE_STATUSES.has(t.status);
-
-        if (!isDone) {
+      if (!isDone) {
+        // Open tasks — use current assignees for all live counts
+        if (currentUids.length === 0) continue;
+        for (const uid of currentUids) {
+          init(uid);
+          stats[uid].tasks.push(t);
           if (t.status === "in_progress") stats[uid].inProgress++;
           else if (t.status === "review" || t.status === "quoted") stats[uid].review++;
           else stats[uid].toDo++;
@@ -281,7 +271,13 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
           }
           if (t.priority === "urgent") stats[uid].urgent++;
         }
-        if (isDone && t.updatedAt && isAfter(parseISO(t.updatedAt), weekStart)) {
+      } else {
+        // Done tasks — credit whoever did the work (completedBy > current assignees)
+        if (!t.updatedAt || !isAfter(parseISO(t.updatedAt), weekStart)) continue;
+        const doneUids = t.completedBy?.length ? t.completedBy : currentUids;
+        if (doneUids.length === 0) continue;
+        for (const uid of doneUids) {
+          init(uid);
           stats[uid].doneWeek++;
         }
       }
@@ -411,49 +407,80 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
 
         {/* Charts row */}
         <div className="grid grid-cols-1 gap-4">
-          {/* Bar chart — staff task breakdown */}
+          {/* Bubble chart — staff task breakdown */}
           <div className="bg-card border border-border rounded-xl p-4">
             <h2 className="text-sm font-semibold mb-1 flex items-center gap-2">
               <Users className="h-4 w-4 text-muted-foreground" />
               Tasks by Staff Member
             </h2>
-            <p className="text-[11px] text-muted-foreground mb-3">Click a bar to see that person's tasks</p>
+            <p className="text-[11px] text-muted-foreground mb-3">Click a column to see that person's tasks</p>
             {barData.length === 0 ? (
               <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
                 No assigned tasks found
               </div>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart
-                  data={barData}
-                  margin={{ top: 4, right: 8, bottom: 4, left: -16 }}
-                  onClick={(data) => {
-                    if (data?.activePayload?.[0]?.payload?.uid) {
-                      const uid = data.activePayload[0].payload.uid;
-                      setSelectedStaff(prev => prev === uid ? null : uid);
-                    }
-                  }}
-                  style={{ cursor: "pointer" }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
-                  <Tooltip
-                    contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: 8, fontSize: 12 }}
-                    formatter={(val, name) => [val, name]}
-                    labelFormatter={(label) => {
-                      const d = barData.find(b => b.name === label);
-                      return d ? d.fullName : label;
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="Overdue" stackId="a" fill={BAR_COLORS.overdue} radius={[0, 0, 0, 0]} />
-                  <Bar dataKey="In Progress" stackId="a" fill={BAR_COLORS.in_progress} />
-                  <Bar dataKey="Review" stackId="a" fill={BAR_COLORS.review} />
-                  <Bar dataKey="To Do" stackId="a" fill={BAR_COLORS.to_do} />
-                  <Bar dataKey="Done This Week" stackId="a" fill={BAR_COLORS.done_week} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <>
+                {/* Legend */}
+                <div className="flex flex-wrap gap-3 mb-4">
+                  {[
+                    { key: "Overdue", color: BAR_COLORS.overdue },
+                    { key: "In Progress", color: BAR_COLORS.in_progress },
+                    { key: "Review", color: BAR_COLORS.review },
+                    { key: "To Do", color: BAR_COLORS.to_do },
+                    { key: "Done This Week", color: BAR_COLORS.done_week },
+                  ].map(({ key, color }) => (
+                    <div key={key} className="flex items-center gap-1.5">
+                      <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: color }} />
+                      <span className="text-[11px] text-muted-foreground">{key}</span>
+                    </div>
+                  ))}
+                </div>
+                {/* Bubble columns */}
+                <div className="flex items-end justify-around gap-2">
+                  {barData.map((d) => {
+                    const segments = [
+                      { key: "Overdue",        count: d["Overdue"],         color: BAR_COLORS.overdue },
+                      { key: "In Progress",    count: d["In Progress"],     color: BAR_COLORS.in_progress },
+                      { key: "Review",         count: d["Review"],          color: BAR_COLORS.review },
+                      { key: "To Do",          count: d["To Do"],           color: BAR_COLORS.to_do },
+                      { key: "Done This Week", count: d["Done This Week"],  color: BAR_COLORS.done_week },
+                    ];
+                    const total = segments.reduce((s, sg) => s + sg.count, 0);
+                    const isSelected = selectedStaff === d.uid;
+                    return (
+                      <button
+                        key={d.uid}
+                        onClick={() => setSelectedStaff(prev => prev === d.uid ? null : d.uid)}
+                        className={`flex flex-col items-center gap-1 flex-1 min-w-0 transition-opacity ${isSelected ? "opacity-100" : "opacity-80 hover:opacity-100"}`}
+                      >
+                        {/* Stacked balls — bottom to top */}
+                        <div className="flex flex-col-reverse items-center gap-1 pb-1">
+                          {segments.map(({ key, count, color }) =>
+                            Array.from({ length: count }).map((_, i) => (
+                              <span
+                                key={`${key}-${i}`}
+                                title={`${key}: ${count}`}
+                                className="block rounded-full shadow-sm flex-shrink-0"
+                                style={{
+                                  width: 28,
+                                  height: 28,
+                                  background: color,
+                                  boxShadow: isSelected ? `0 0 0 2px white, 0 0 0 3px ${color}` : undefined,
+                                }}
+                              />
+                            ))
+                          )}
+                        </div>
+                        {/* Name + total */}
+                        <span className={`text-[11px] font-medium truncate max-w-full ${isSelected ? "text-primary" : "text-muted-foreground"}`}>
+                          {d.name}
+                        </span>
+                        <span className="text-[10px] text-muted-foreground">{total} open</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
             )}
 
             {/* Drilldown panel */}
@@ -526,22 +553,22 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
                 })}
               </div>
 
-              {/* Rotating insult for whoever has the worst combined score */}
+              {/* Rotating motivational nudge for whoever has the most pending work */}
               {(() => {
-                const worst = [...staffStats].sort((a, b) =>
+                const mostPending = [...staffStats].sort((a, b) =>
                   (b.overdue + b.toDo + b.urgent) - (a.overdue + a.toDo + a.urgent)
                 )[0];
-                if (!worst || (worst.overdue + worst.toDo + worst.urgent) === 0) return null;
+                if (!mostPending || (mostPending.overdue + mostPending.toDo + mostPending.urgent) === 0) return null;
                 return (
-                  <div className="mb-6 px-4 py-3 rounded-xl border border-red-500/30 bg-red-500/5 flex items-start gap-2">
-                    <span className="text-lg shrink-0">📢</span>
+                  <div className="mb-6 px-4 py-3 rounded-xl border border-amber-400/30 bg-amber-400/5 flex items-start gap-2">
+                    <span className="text-lg shrink-0">💬</span>
                     <div>
-                      <span className="text-xs font-bold text-red-600 uppercase tracking-wide">{worst.name.split(" ")[0]}: </span>
+                      <span className="text-xs font-bold text-amber-600 uppercase tracking-wide">{mostPending.name.split(" ")[0]}: </span>
                       <span
-                        key={insultIdx}
-                        className="text-xs text-red-700 italic font-medium animate-in fade-in duration-500"
+                        key={motivationIdx}
+                        className="text-xs text-amber-700 italic font-medium animate-in fade-in duration-500"
                       >
-                        {ROTATING_INSULTS[insultIdx]}
+                        {ROTATING_MOTIVATION[motivationIdx]}
                       </span>
                     </div>
                   </div>
@@ -556,10 +583,10 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
                   data={[...staffStats].sort((a, b) => b.doneWeek - a.doneWeek).map(s => ({ name: s.name, value: s.doneWeek, i: staffStats.indexOf(s) }))}
                   unit="tasks"
                   barColor="bg-green-500"
-                  emptyMsg="Nobody finished anything yet 😴"
+                  emptyMsg="Nothing closed yet this week — let's change that!"
                 />
                 <AssessmentBars
-                  title="Overdue — Falling Behind"
+                  title="Overdue — Needs Attention"
                   icon={<TrendingDown className="h-3.5 w-3.5 text-red-500" />}
                   data={[...staffStats].sort((a, b) => b.overdue - a.overdue).map(s => ({ name: s.name, value: s.overdue, i: staffStats.indexOf(s) }))}
                   unit="tasks"
@@ -582,8 +609,8 @@ export function StaffDashboardPage({ onClose, workspace, onOpenTask }: Props) {
         {/* Who's Behind table */}
         <div className="bg-card border border-border rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400" />
-            <h2 className="text-sm font-semibold">Who's Behind</h2>
+            <Zap className="h-4 w-4 text-amber-400" />
+            <h2 className="text-sm font-semibold">Team Workload Overview</h2>
             <span className="text-xs text-muted-foreground ml-auto">Click a name to drill down into tasks</span>
           </div>
           {sortedStaff.length === 0 ? (

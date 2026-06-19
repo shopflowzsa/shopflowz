@@ -75,6 +75,8 @@ function emptyItem(): Omit<InventoryItem, "id" | "createdAt" | "updatedAt"> {
     supplier: "", location: "", imageUrl: "", status: "active",
     itemType: "inventory",
     packSize: undefined, packPrice: undefined,
+    extraImages: [],
+    productVariants: [],
   };
 }
 
@@ -117,13 +119,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     });
   }
 
-  const [searchInput, setSearchInput] = useState(""); // what the user types (instant)
-  const [searchTerm, setSearchTerm] = useState("");   // what the filter uses (debounced)
-  useEffect(() => {
-    if (searchInput === searchTerm) return;
-    const t = setTimeout(() => setSearchTerm(searchInput), 200);
-    return () => clearTimeout(t);
-  }, [searchInput, searchTerm]);
+  const [searchInput, setSearchInput] = useState("");
+  const searchTerm = searchInput;
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterStatus, setFilterStatus] = useState<"all" | "low" | "out">("all");
   const [sortField, setSortField] = useState<"name" | "quantity" | "price">("name");
@@ -158,6 +155,10 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
+  // Extra images (multi-image / clothing gallery)
+  const [pendingExtraImages, setPendingExtraImages] = useState<{ file: File; preview: string }[]>([]);
+  // Variant builder toggle
+  const [variantsEnabled, setVariantsEnabled] = useState(false);
   const { toast } = useToast();
 
   // Bulk Editor
@@ -309,14 +310,13 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
   const filteredItems = useMemo(() => {
     let result = items;
     if (searchTerm) {
-      const s = searchTerm.toLowerCase();
-      result = result.filter(
-        (i) =>
-          (i.name || "").toLowerCase().includes(s) ||
-          (i.sku || "").toLowerCase().includes(s) ||
-          (i.category || "").toLowerCase().includes(s) ||
-          (i.supplier || "").toLowerCase().includes(s)
-      );
+      const words = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+      result = result.filter((i) => {
+        const haystack = [i.name, i.sku, i.category, i.supplier, i.description]
+          .map(v => (v || "").toLowerCase())
+          .join(" ");
+        return words.every(w => haystack.includes(w));
+      });
     }
     if (filterCategory !== "all") result = result.filter((i) => i.category === filterCategory);
     if (filterStatus === "low") result = result.filter((i) => i.quantity > 0 && i.quantity <= i.reorderLevel);
@@ -510,10 +510,13 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     setFormData(emptyItem());
     setImageFile(null);
     setImagePreview(null);
+    setPendingExtraImages([]);
+    setVariantsEnabled(false);
     setShowAddEdit(true);
   }
   function openEdit(item: InventoryItem) {
     setEditingItem(item);
+    const existingVariants = (item as any).productVariants || [];
     setFormData({
       name: item.name, sku: item.sku, description: item.description,
       category: item.category, price: item.price, costPrice: item.costPrice,
@@ -522,9 +525,13 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       imageUrl: item.imageUrl || "", status: item.status,
       itemType: item.itemType ?? "inventory",
       packSize: (item as any).packSize, packPrice: (item as any).packPrice,
+      extraImages: (item as any).extraImages || [],
+      productVariants: existingVariants,
     });
     setImageFile(null);
     setImagePreview(item.imageUrl || null);
+    setPendingExtraImages([]);
+    setVariantsEnabled(existingVariants.length > 0);
     setShowAddEdit(true);
   }
 
@@ -566,6 +573,32 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     setFormData({ ...formData, imageUrl: "" });
   }
 
+  async function handleExtraImageAdd(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      if (file.size > 5 * 1024 * 1024) {
+        toast({ title: "File too large", description: "Extra images must be under 5MB each", variant: "destructive" });
+        continue;
+      }
+      const preview = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(file);
+      });
+      setPendingExtraImages(prev => [...prev, { file, preview }]);
+    }
+    e.target.value = "";
+  }
+
+  function removeExistingExtraImage(index: number) {
+    setFormData(prev => ({ ...prev, extraImages: (prev.extraImages || []).filter((_, i) => i !== index) }));
+  }
+
+  function removePendingExtraImage(index: number) {
+    setPendingExtraImages(prev => prev.filter((_, i) => i !== index));
+  }
+
   async function uploadImage(): Promise<string> {
     if (!imageFile || !workspaceId) return formData.imageUrl;
 
@@ -597,13 +630,24 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     setSaving(true);
     setErrorMsg(null);
     try {
-      // Upload image if a new file is selected
+      // Upload main image if a new file is selected
       let imageUrl = formData.imageUrl;
       if (imageFile) {
         imageUrl = await uploadImage();
       }
 
-      const dataToSave = { ...formData, sku: skuToUse, imageUrl };
+      // Upload any pending extra images
+      const folder = `workspaces/${workspaceId}/inventory`;
+      const uploadedExtraUrls: string[] = [];
+      for (const { file } of pendingExtraImages) {
+        try {
+          const url = await uploadImageToCloudinary(file, folder);
+          uploadedExtraUrls.push(url);
+        } catch (_) { /* skip failed extra images silently */ }
+      }
+      const allExtraImages = [...(formData.extraImages || []), ...uploadedExtraUrls];
+
+      const dataToSave = { ...formData, sku: skuToUse, imageUrl, extraImages: allExtraImages };
 
       const nowIso = new Date().toISOString();
       if (editingItem) {
@@ -632,6 +676,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       setShowAddEdit(false);
       setImageFile(null);
       setImagePreview(null);
+      setPendingExtraImages([]);
+      setVariantsEnabled(false);
     } catch (e: any) {
       setErrorMsg(e?.message || "Failed to save item");
       toast({
@@ -1647,19 +1693,20 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                           )}
                         </button>
                       </th>
-                      <th className="text-left px-3 py-2 font-medium cursor-pointer select-none" onClick={() => toggleSort("name")}>
+                      <th className="text-left px-3 py-2 font-medium cursor-pointer select-none w-48 min-w-[160px]" onClick={() => toggleSort("name")}>
                         Name <SortIcon field="name" />
                       </th>
-                      <th className="text-left px-3 py-2 font-medium hidden md:table-cell">SKU</th>
-                      <th className="text-left px-3 py-2 font-medium hidden lg:table-cell">Category</th>
-                      <th className="text-right px-3 py-2 font-medium cursor-pointer select-none" onClick={() => toggleSort("quantity")}>
+                      <th className="text-left px-3 py-2 font-medium hidden xl:table-cell w-64 max-w-xs">Description</th>
+                      <th className="text-left px-3 py-2 font-medium hidden md:table-cell w-32">SKU</th>
+                      <th className="text-left px-3 py-2 font-medium hidden lg:table-cell w-28">Category</th>
+                      <th className="text-right px-3 py-2 font-medium cursor-pointer select-none w-16" onClick={() => toggleSort("quantity")}>
                         Qty <SortIcon field="quantity" />
                       </th>
-                      <th className="text-left px-3 py-2 font-medium hidden md:table-cell">Status</th>
-                      <th className="text-right px-3 py-2 font-medium cursor-pointer select-none hidden sm:table-cell" onClick={() => toggleSort("price")}>
+                      <th className="text-left px-3 py-2 font-medium hidden md:table-cell w-24">Status</th>
+                      <th className="text-right px-3 py-2 font-medium cursor-pointer select-none hidden sm:table-cell w-24" onClick={() => toggleSort("price")}>
                         Price <SortIcon field="price" />
                       </th>
-                      <th className="text-right px-3 py-2 font-medium hidden lg:table-cell">Cost</th>
+                      <th className="text-right px-3 py-2 font-medium hidden lg:table-cell w-20">Cost</th>
                       <th className="px-3 py-2"></th>
                     </tr>
                   </thead>
@@ -1701,6 +1748,9 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                               {item.supplier && <div className="text-xs text-muted-foreground">{item.supplier}</div>}
                             </div>
                           </div>
+                        </td>
+                        <td className="px-3 py-2 hidden xl:table-cell max-w-xs">
+                          <span className="text-xs text-muted-foreground line-clamp-2">{item.description || ""}</span>
                         </td>
                         <td className="px-3 py-2 font-mono text-xs hidden md:table-cell">{item.sku}</td>
                         <td className="px-3 py-2 hidden lg:table-cell">{item.category}</td>
@@ -2479,6 +2529,129 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                 />
               </div>
             </div>
+            )}
+            {/* Additional Images */}
+            {formData.itemType !== "service" && (
+              <div>
+                <Label className="text-xs">
+                  Additional Images <span className="text-muted-foreground font-normal">(optional — clothing angles, colour variants, etc.)</span>
+                </Label>
+                <div className="mt-1.5 flex flex-wrap gap-2 items-center">
+                  {(formData.extraImages || []).map((url, i) => (
+                    <div key={i} className="relative">
+                      <img src={url} alt="" className="w-14 h-14 object-cover rounded border" />
+                      <button type="button" onClick={() => removeExistingExtraImage(i)}
+                        className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center text-[10px] hover:bg-red-600 leading-none">
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  {pendingExtraImages.map((p, i) => (
+                    <div key={`pending_${i}`} className="relative">
+                      <img src={p.preview} alt="" className="w-14 h-14 object-cover rounded border border-blue-300 opacity-80" />
+                      <button type="button" onClick={() => removePendingExtraImage(i)}
+                        className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 text-white flex items-center justify-center text-[10px] hover:bg-red-600 leading-none">
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <label className="w-14 h-14 border-2 border-dashed rounded flex flex-col items-center justify-center cursor-pointer hover:border-primary text-muted-foreground hover:text-primary transition-colors gap-0.5">
+                    <Plus className="h-4 w-4" />
+                    <span className="text-[9px]">Add</span>
+                    <input type="file" accept="image/*" multiple className="hidden" onChange={handleExtraImageAdd} />
+                  </label>
+                </div>
+              </div>
+            )}
+            {/* Product Variants */}
+            {formData.itemType !== "service" && (
+              <div className="border rounded-lg p-3 bg-muted/30">
+                <div className="flex items-center gap-2 mb-2">
+                  <Checkbox
+                    id="enableVariants"
+                    checked={variantsEnabled}
+                    onCheckedChange={(checked) => {
+                      const on = !!checked;
+                      setVariantsEnabled(on);
+                      if (on && (formData.productVariants || []).length === 0) {
+                        setFormData(prev => ({ ...prev, productVariants: [{ id: `v_${Date.now()}`, name: "", stock: 0 }] }));
+                      } else if (!on) {
+                        setFormData(prev => ({ ...prev, productVariants: [] }));
+                      }
+                    }}
+                  />
+                  <Label htmlFor="enableVariants" className="text-xs font-medium cursor-pointer">
+                    This product has size / colour variants
+                  </Label>
+                </div>
+                {variantsEnabled && (
+                  <>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Add each option (e.g. "Red / Large", "Blue / S"). Stock is tracked per variant — the Quantity field above is ignored.
+                    </p>
+                    <div className="space-y-1.5">
+                      <div className="grid grid-cols-[1fr_72px_88px_24px] gap-1.5 text-[11px] font-medium text-muted-foreground px-0.5">
+                        <span>Variant Name</span><span>Stock</span><span>Price (R)</span><span />
+                      </div>
+                      {(formData.productVariants || []).map((pv: any, i: number) => (
+                        <div key={pv.id || i} className="grid grid-cols-[1fr_72px_88px_24px] gap-1.5 items-center">
+                          <Input
+                            placeholder='e.g. "Red / Large"'
+                            value={pv.name}
+                            onChange={(e) => {
+                              const updated = [...(formData.productVariants || [])];
+                              updated[i] = { ...updated[i], name: e.target.value };
+                              setFormData(prev => ({ ...prev, productVariants: updated }));
+                            }}
+                            className="h-7 text-xs"
+                          />
+                          <Input
+                            type="number" min="0" placeholder="0"
+                            value={pv.stock ?? ""}
+                            onChange={(e) => {
+                              const updated = [...(formData.productVariants || [])];
+                              updated[i] = { ...updated[i], stock: parseInt(e.target.value) || 0 };
+                              setFormData(prev => ({ ...prev, productVariants: updated }));
+                            }}
+                            className="h-7 text-xs"
+                          />
+                          <Input
+                            type="number" min="0" step="0.01"
+                            placeholder={formData.price ? String(formData.price) : "same"}
+                            value={pv.price ?? ""}
+                            onChange={(e) => {
+                              const updated = [...(formData.productVariants || [])];
+                              updated[i] = { ...updated[i], price: e.target.value ? parseFloat(e.target.value) || undefined : undefined };
+                              setFormData(prev => ({ ...prev, productVariants: updated }));
+                            }}
+                            className="h-7 text-xs"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = (formData.productVariants || []).filter((_: any, j: number) => j !== i);
+                              setFormData(prev => ({ ...prev, productVariants: updated }));
+                              if (updated.length === 0) setVariantsEnabled(false);
+                            }}
+                            className="h-7 flex items-center justify-center text-muted-foreground hover:text-destructive"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    <Button
+                      type="button" variant="outline" size="sm" className="mt-2 h-7 text-xs"
+                      onClick={() => setFormData(prev => ({
+                        ...prev,
+                        productVariants: [...(prev.productVariants || []), { id: `v_${Date.now()}`, name: "", stock: 0 }]
+                      }))}
+                    >
+                      <Plus className="h-3 w-3 mr-1" /> Add Variant
+                    </Button>
+                  </>
+                )}
+              </div>
             )}
             <div>
               <Label className="text-xs">Status</Label>

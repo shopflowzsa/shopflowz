@@ -171,23 +171,212 @@ export async function sbSetWorkspaceState(
   if (error) throw new Error(`sbSetWorkspaceState: ${error.message}`);
 }
 
-/** Atomically remove one task and add its ID to the tombstone list. */
+// ── Per-task row operations (tasks table) ────────────────────────────────────
+
+/** Upsert a single task row — instant, isolated, no blob write. */
+export async function sbUpsertTask(workspaceId: string, task: Record<string, unknown>): Promise<void> {
+  const taskId = task.id as string;
+  if (!taskId) throw new Error('sbUpsertTask: task.id is required');
+  // Use direct table upsert instead of RPC — the RPC passes data as a JSON
+  // argument which fails when task.data contains control characters (e.g.
+  // embedded base64 photos or multiline descriptions). Direct .upsert() lets
+  // the Supabase JS client serialize the JSONB column safely.
+  const { error } = await supabaseServiceRole
+    .from('tasks')
+    .upsert(
+      { id: taskId, workspace_id: workspaceId, data: task, updated_at: new Date().toISOString() },
+      { onConflict: 'id' }
+    );
+  if (error) throw new Error(`sbUpsertTask: ${error.message}`);
+}
+
+/** Delete a single task row. */
 export async function sbDeleteTask(workspaceId: string, taskId: string): Promise<void> {
-  const { error } = await supabaseServiceRole.rpc('delete_task_from_workspace', {
+  const { error } = await supabaseServiceRole.rpc('delete_task', {
     p_workspace_id: workspaceId,
     p_task_id: taskId,
   });
   if (error) throw new Error(`sbDeleteTask: ${error.message}`);
 }
 
-/** Atomically replace one task's record in the tasks array (by id). */
-export async function sbUpdateTask(workspaceId: string, task: Record<string, unknown>): Promise<void> {
-  const { error } = await supabaseServiceRole.rpc('update_task_in_workspace', {
+/** Fetch all task rows for a workspace. Returns raw task data objects. */
+export async function sbGetTasks(workspaceId: string): Promise<Record<string, unknown>[]> {
+  const { data, error } = await supabaseServiceRole
+    .from('tasks')
+    .select('data')
+    .eq('workspace_id', workspaceId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`sbGetTasks: ${error.message}`);
+  return (data || []).map(row => row.data as Record<string, unknown>);
+}
+
+/** Insert a new task and bump the workspace job counter atomically. */
+export async function sbInsertTaskWithJobNumber(
+  workspaceId: string,
+  task: Record<string, unknown>,
+  jobCounter: number,
+): Promise<void> {
+  const { error } = await supabaseServiceRole.rpc('insert_task_with_job_number', {
     p_workspace_id: workspaceId,
     p_task: task,
+    p_job_counter: jobCounter,
   });
-  if (error) throw new Error(`sbUpdateTask: ${error.message}`);
+  if (error) throw new Error(`sbInsertTaskWithJobNumber: ${error.message}`);
 }
+
+/**
+ * Subscribe to per-task realtime changes for a workspace.
+ * Each event delivers exactly one task's data — no full-state re-fetch needed.
+ * onInsert/onUpdate receive the task data object; onDelete receives the task id.
+ */
+export function sbSubscribeTasks(
+  workspaceId: string,
+  callbacks: {
+    onInsert: (task: Record<string, unknown>) => void;
+    onUpdate: (task: Record<string, unknown>) => void;
+    onDelete: (taskId: string) => void;
+  }
+) {
+  // Fetch a single task row by id — fallback when payload.new.data is null.
+  // This happens when REPLICA IDENTITY is not yet FULL on the table.
+  const fetchAndDeliver = async (taskId: string, cb: (t: Record<string, unknown>) => void) => {
+    try {
+      const { data, error } = await supabaseServiceRole
+        .from('tasks')
+        .select('data')
+        .eq('id', taskId)
+        .maybeSingle();
+      if (!error && data?.data) cb(data.data as Record<string, unknown>);
+    } catch (e) {
+      console.warn('[sbSubscribeTasks] fallback fetch failed for task', taskId, e);
+    }
+  };
+
+  const channel = supabase
+    .channel(`tasks:${workspaceId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'tasks',
+        filter: `workspace_id=eq.${workspaceId}`,
+      },
+      (payload) => {
+        const row = payload.new as any;
+        if (row?.data) {
+          callbacks.onInsert(row.data);
+        } else if (row?.id) {
+          fetchAndDeliver(row.id, callbacks.onInsert);
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'tasks',
+        filter: `workspace_id=eq.${workspaceId}`,
+      },
+      (payload) => {
+        const row = payload.new as any;
+        if (row?.data) {
+          callbacks.onUpdate(row.data);
+        } else if (row?.id) {
+          fetchAndDeliver(row.id, callbacks.onUpdate);
+        }
+      }
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: 'DELETE',
+        schema: 'public',
+        table: 'tasks',
+        filter: `workspace_id=eq.${workspaceId}`,
+      },
+      (payload) => {
+        const row = payload.old as any;
+        if (row?.id) callbacks.onDelete(row.id);
+      }
+    )
+    .subscribe();
+
+  return () => { supabase.removeChannel(channel); };
+}
+
+// ── Per-comment row operations (task_comments table) ─────────────────────────
+
+/** Insert a single comment row — each comment is an isolated INSERT, no conflicts. */
+export async function sbInsertComment(
+  workspaceId: string,
+  taskId: string,
+  comment: Record<string, unknown>,
+): Promise<void> {
+  const { error } = await supabaseServiceRole.rpc('insert_task_comment', {
+    p_workspace_id: workspaceId,
+    p_task_id: taskId,
+    p_comment: comment,
+  });
+  if (error) throw new Error(`sbInsertComment: ${error.message}`);
+}
+
+/** Delete a comment row. */
+export async function sbDeleteComment(workspaceId: string, commentId: string): Promise<void> {
+  const { error } = await supabaseServiceRole.rpc('delete_task_comment', {
+    p_workspace_id: workspaceId,
+    p_comment_id: commentId,
+  });
+  if (error) throw new Error(`sbDeleteComment: ${error.message}`);
+}
+
+/** Fetch all comments for a task, ordered oldest-first. */
+export async function sbGetComments(taskId: string): Promise<Record<string, unknown>[]> {
+  const { data, error } = await supabaseServiceRole
+    .from('task_comments')
+    .select('data')
+    .eq('task_id', taskId)
+    .order('created_at', { ascending: true });
+  if (error) throw new Error(`sbGetComments: ${error.message}`);
+  return (data || []).map(row => row.data as Record<string, unknown>);
+}
+
+/**
+ * Subscribe to live comment changes for a single task.
+ * onInsert fires for new comments/activity from any user — instant live chat.
+ * onDelete fires when a comment is removed.
+ */
+export function sbSubscribeComments(
+  taskId: string,
+  callbacks: {
+    onInsert: (comment: Record<string, unknown>) => void;
+    onDelete: (commentId: string) => void;
+  },
+) {
+  const channel = supabase
+    .channel(`task_comments:${taskId}`)
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'task_comments', filter: `task_id=eq.${taskId}` },
+      (payload) => {
+        const row = payload.new as any;
+        if (row?.data) callbacks.onInsert(row.data);
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: 'DELETE', schema: 'public', table: 'task_comments', filter: `task_id=eq.${taskId}` },
+      (payload) => {
+        const row = payload.old as any;
+        if (row?.id) callbacks.onDelete(row.id);
+      }
+    )
+    .subscribe();
+  return () => { supabase.removeChannel(channel); };
+}
+
+// ── Workspace state subscription (non-task state: spaces, lists, forms etc.) ─
 
 export function sbSubscribeWorkspaceState(
   workspaceId: string,
@@ -204,10 +393,9 @@ export function sbSubscribeWorkspaceState(
         filter: `workspace_id=eq.${workspaceId}`,
       },
       async () => {
-        // Always fetch fresh state on any DB change notification.
-        // Relying on payload.new.state fails for large workspaces because
-        // Supabase truncates realtime messages above ~1MB — the state field
-        // arrives as null and no update is applied on the receiving tab.
+        // Tasks now live in their own table — workspace_state only carries
+        // spaces, lists, forms, quotes, counters etc. (all small enough that
+        // the realtime payload is never truncated). We still re-fetch to be safe.
         try {
           const state = await sbGetWorkspaceState(workspaceId);
           if (state) onUpdate(state);

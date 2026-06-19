@@ -150,7 +150,7 @@ export default function LoginPage() {
     try {
       // Register the account — will auto-authenticate if email verification is disabled
       const fullAddress = [regAddress, regSuburb, regCity, regPostalCode].filter(Boolean).join(', ');
-      await register(regEmail, regPassword, regName, regPhone, fullAddress);
+      await register(regEmail, regPassword, regName, regPhone, fullAddress, isCustomDomain ? 'store_customer' : 'crm_user');
       setRegSuccess(true);
       setRegError("");
       // Don't call login again — just mark as redirecting and let onAuthStateChange handle it

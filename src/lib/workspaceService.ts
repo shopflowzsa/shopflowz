@@ -1,4 +1,4 @@
-import { supabase, supabaseServiceRole, sbGetWorkspaceState, sbSetWorkspaceState, sbSubscribeWorkspaceState, sbDeleteTask, sbUpdateTask } from "@/lib/supabase";
+import { supabase, supabaseServiceRole, sbGetWorkspaceState, sbSetWorkspaceState, sbSubscribeWorkspaceState, sbDeleteTask, sbUpsertTask, sbGetTasks, sbInsertTaskWithJobNumber, sbSubscribeTasks } from "@/lib/supabase";
 import { WorkspaceState, FormDefinition, Task } from "@/types/crm";
 import { logNewTask } from "@/lib/jobLogService";
 
@@ -38,12 +38,19 @@ export async function loadWorkspaceState(workspaceId: string): Promise<Workspace
   console.log('[WorkspaceService] Loading workspace state for:', workspaceId);
   const state = await sbGetWorkspaceState(workspaceId);
   if (state) {
+    // Ensure tasks is always an array — blob no longer stores tasks (they live
+    // in the tasks table) so state.tasks may be absent after the migration.
+    const safe = {
+      ...emptyWorkspaceState,
+      ...(state as any),
+      tasks: (state as any).tasks ?? [],
+    } as WorkspaceState;
     console.log('[WorkspaceService] Loaded existing state:', {
-      tasks: (state as any).tasks?.length || 0,
-      lists: (state as any).lists?.length || 0,
-      spaces: (state as any).spaces?.length || 0
+      tasks: safe.tasks.length,
+      lists: safe.lists?.length || 0,
+      spaces: safe.spaces?.length || 0
     });
-    return state as WorkspaceState;
+    return safe;
   }
 
   // State row doesn't exist yet — this is a brand-new workspace (first signup).
@@ -66,17 +73,51 @@ export async function saveWorkspaceState(workspaceId: string, state: WorkspaceSt
   await sbSetWorkspaceState(workspaceId, removeUndefinedValues(state) as any);
 }
 
-/** Atomically delete one task from the DB (no full-state save needed). */
+/** Fetch all tasks for a workspace from the tasks table. */
+export async function loadTasksForWorkspace(workspaceId: string): Promise<Task[]> {
+  const rows = await sbGetTasks(workspaceId);
+  return rows as unknown as Task[];
+}
+
+/** Upsert a single task row — instant, isolated write. */
+export async function upsertTask(workspaceId: string, task: Task): Promise<void> {
+  await sbUpsertTask(workspaceId, removeUndefinedValues(task) as any);
+}
+
+/** Delete a single task row. */
 export async function deleteTaskFromWorkspace(workspaceId: string, taskId: string): Promise<void> {
   await sbDeleteTask(workspaceId, taskId);
 }
 
-/** Atomically update one task in the DB (no full-state save needed). */
-export async function updateTaskInWorkspace(workspaceId: string, task: Task): Promise<void> {
-  await sbUpdateTask(workspaceId, removeUndefinedValues(task) as any);
+/** Insert a new task and bump the workspace job counter atomically. */
+export async function insertTaskWithJobNumber(
+  workspaceId: string,
+  task: Task,
+  jobCounter: number,
+): Promise<void> {
+  await sbInsertTaskWithJobNumber(workspaceId, removeUndefinedValues(task) as any, jobCounter);
 }
 
-/** Subscribe to real-time workspace state updates. */
+/**
+ * Subscribe to per-task realtime changes.
+ * Callbacks receive individual task objects — no full-state re-fetch.
+ */
+export function subscribeTaskChanges(
+  workspaceId: string,
+  callbacks: {
+    onInsert: (task: Task) => void;
+    onUpdate: (task: Task) => void;
+    onDelete: (taskId: string) => void;
+  },
+): Unsubscribe {
+  return sbSubscribeTasks(workspaceId, {
+    onInsert: (t) => callbacks.onInsert(t as unknown as Task),
+    onUpdate: (t) => callbacks.onUpdate(t as unknown as Task),
+    onDelete: callbacks.onDelete,
+  });
+}
+
+/** Subscribe to real-time workspace state updates (non-task state only). */
 export function subscribeWorkspaceState(
   workspaceId: string,
   onUpdate: (state: WorkspaceState) => void,
@@ -345,20 +386,15 @@ export async function claimJobNumberAndAddTask(
     id: `t${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
   };
 
-  // Use the atomic DB-side append so a stale tab's full-state save can never
-  // overwrite a task that was just created. The function does:
-  //   tasks = existing_tasks_in_db || [newTask]
-  //   jobCounter = GREATEST(existing, counterAfter)
-  // — no read-modify-write race, no concurrent-save data loss.
+  // Insert into the tasks table and bump job counter atomically.
   try {
-    const { error } = await supabase.rpc('append_task_to_workspace', {
-      p_workspace_id: workspaceId,
-      p_task: removeUndefinedValues(newTask) as any,
-      p_job_counter: Math.max(existingCounter, counterAfter),
-    });
-    if (error) throw new Error(error.message);
+    await sbInsertTaskWithJobNumber(
+      workspaceId,
+      removeUndefinedValues(newTask) as any,
+      Math.max(existingCounter, counterAfter),
+    );
   } catch (err) {
-    console.error('[claimJob] Atomic append failed — re-queuing submission:', err);
+    console.error('[claimJob] Atomic insert failed — re-queuing submission:', err);
     try {
       await supabaseServiceRole.from('form_submissions').insert(deleted[0]);
     } catch (reinsertErr) {
@@ -367,8 +403,9 @@ export async function claimJobNumberAndAddTask(
     return null;
   }
 
-  // Build updatedState for the caller's local UI update. Avoid a second heavy
-  // DB read — the RPC already persisted the task; append it locally instead.
+  // Build updatedState for the caller's local UI update.
+  // Tasks now come from the tasks table, but the caller only needs the new task
+  // appended so the UI shows it immediately without a full re-fetch.
   const updatedState: WorkspaceState = {
     ...currentState,
     tasks: [...currentState.tasks, newTask],

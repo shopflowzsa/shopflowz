@@ -89,6 +89,71 @@ function resolveFieldValue(
   }
 }
 
+// ─── Conversation upsert for outbound messages ───────────────────────────────
+
+async function upsertOutboundConversation(
+  workspaceId: string,
+  recipientPhone: string,
+  contactName: string,
+  templateName: string,
+  wamid: string | null,
+): Promise<void> {
+  try {
+    const now = new Date().toISOString();
+    const lastMsg = `[Template: ${templateName}]`;
+
+    const { data: existing } = await supabaseServiceRole
+      .from('whatsapp_conversations')
+      .select('id')
+      .eq('workspace_id', workspaceId)
+      .eq('contact_phone', recipientPhone)
+      .maybeSingle();
+
+    let convId: string;
+    if (existing) {
+      convId = existing.id;
+      await supabaseServiceRole.from('whatsapp_conversations').update({
+        last_message: lastMsg,
+        last_message_at: now,
+        last_replied_by_name: 'System',
+      }).eq('id', convId);
+    } else {
+      const newId = `wc_${Date.now()}_${Math.random().toString(36).substr(2, 7)}`;
+      const { data: created } = await supabaseServiceRole
+        .from('whatsapp_conversations')
+        .insert({
+          id: newId,
+          workspace_id: workspaceId,
+          contact_phone: recipientPhone,
+          contact_name: contactName,
+          last_message: lastMsg,
+          last_message_at: now,
+          unread_count: 0,
+          last_replied_by_name: 'System',
+        })
+        .select('id')
+        .single();
+      if (!created) return;
+      convId = created.id;
+    }
+
+    const msgId = `wm_${Date.now()}_${Math.random().toString(36).substr(2, 7)}`;
+    await supabaseServiceRole.from('whatsapp_messages').insert({
+      id: msgId,
+      workspace_id: workspaceId,
+      conversation_id: convId,
+      wamid: wamid ?? null,
+      direction: 'outbound',
+      message_type: 'template',
+      content: lastMsg,
+      status: 'sent',
+      sent_by_name: 'System',
+    });
+  } catch (err) {
+    console.error('[WhatsApp] Failed to upsert conversation for outbound:', err);
+  }
+}
+
 // ─── Send via Meta Cloud API ──────────────────────────────────────────────────
 
 export async function loadWhatsAppLogs(workspaceId: string, max = 50): Promise<WhatsAppLog[]> {
@@ -339,6 +404,11 @@ async function sendOneTemplate(
     taskId: task.id, taskTitle: task.title, parameters,
   }).catch(() => {});
   console.log(`[WhatsApp][${label}] ✅ sent OK, messageId:`, msgId);
+
+  // Create/update conversation in the Messenger inbox so staff can follow up
+  if (label !== "cc") {
+    await upsertOutboundConversation(workspaceId, recipientPhone, task.title, cfg.templateName, msgId);
+  }
 }
 
 export async function sendTaskWhatsApp(

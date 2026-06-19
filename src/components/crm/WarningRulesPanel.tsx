@@ -12,7 +12,7 @@ import { supabase, supabaseServiceRole } from "@/lib/supabase";
 // Types
 // ─────────────────────────────────────────────
 
-export type WarningRuleType = "missing_fields" | "block_new_in_stale_list" | "stale_task";
+export type WarningRuleType = "missing_fields" | "block_new_in_stale_list" | "stale_task" | "list_age_lockout";
 
 export type StaleCheckTrigger = "on_load" | "on_open" | "daily_08";
 
@@ -153,7 +153,7 @@ export function WarningRulesPanel({
 
     // Per-type validation
     if (type === "missing_fields" && !editingRule.required_fields?.length) return;
-    if ((type === "block_new_in_stale_list" || type === "stale_task") &&
+    if ((type === "block_new_in_stale_list" || type === "stale_task" || type === "list_age_lockout") &&
         (!editingRule.stale_threshold_days || editingRule.stale_threshold_days <= 0)) return;
 
     setIsLoading(true);
@@ -426,6 +426,9 @@ export function WarningRulesPanel({
                             {rule.stale_check_trigger && ` (${rule.stale_check_trigger.replace("_", " ")})`}
                           </>
                         )}
+                        {rule.rule_type === "list_age_lockout" && (
+                          <>🔒 Lock staff out when a task is {rule.stale_threshold_days}+ days old in this list</>
+                        )}
                       </p>
                     </div>
                     <div className="flex items-center gap-1 ml-2">
@@ -503,6 +506,9 @@ export function WarningRulesPanel({
                     <SelectItem value="stale_task" className="text-foreground">
                       Alert — stale task in folder
                     </SelectItem>
+                    <SelectItem value="list_age_lockout" className="text-foreground">
+                      🔒 Lock staff out — task too old in list
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
@@ -510,6 +516,8 @@ export function WarningRulesPanel({
                     "Prevents creating a new task while an existing task in the same list has gone stale."}
                   {editingRule.rule_type === "stale_task" &&
                     "Warns reception when a task has been sitting too long, and requires a reason."}
+                  {editingRule.rule_type === "list_age_lockout" &&
+                    "Locks the assigned staff member out of all other tasks until they clear the overdue task in this list. Works like the task limit lockout."}
                   {(!editingRule.rule_type || editingRule.rule_type === "missing_fields") &&
                     "Original rule: warns when a task is moved without required fields filled in."}
                 </p>
@@ -561,7 +569,8 @@ export function WarningRulesPanel({
               {/* List Selection — only for stale-task rules. Leaving blank
                   scopes the rule to the whole folder. */}
               {(editingRule.rule_type === "block_new_in_stale_list" ||
-                editingRule.rule_type === "stale_task") && (
+                editingRule.rule_type === "stale_task" ||
+                editingRule.rule_type === "list_age_lockout") && (
                 <div className="space-y-2">
                   <Label className="text-foreground/80">List (optional)</Label>
                   {(() => {
@@ -608,7 +617,8 @@ export function WarningRulesPanel({
 
               {/* Stale-task fields (only for stale rule types) */}
               {(editingRule.rule_type === "block_new_in_stale_list" ||
-                editingRule.rule_type === "stale_task") && (
+                editingRule.rule_type === "stale_task" ||
+                editingRule.rule_type === "list_age_lockout") && (
                 <>
                   <div className="space-y-2">
                     <Label className="text-foreground/80">Threshold (days)</Label>

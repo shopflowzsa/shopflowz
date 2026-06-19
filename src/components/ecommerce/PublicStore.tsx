@@ -1559,6 +1559,19 @@ function MiniProductCard({
             )}
           </p>
         )}
+        {v && (() => {
+          const hasVariants = product.variants.length > 1;
+          const anyInStock = product.variants.some(v => v.inStock);
+          return (
+            <button
+              onClick={(e) => { e.stopPropagation(); hasVariants ? onViewDetails(product) : onAddToCart(product, v.id, 1); }}
+              disabled={!anyInStock}
+              className="mt-2 w-full text-[10px] font-semibold py-1 rounded transition-colors disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed bg-orange-500 hover:bg-orange-600 text-white"
+            >
+              {anyInStock ? (hasVariants ? "Select Options" : "Add to Cart") : "Out of Stock"}
+            </button>
+          );
+        })()}
       </div>
     </div>
   );
@@ -1588,7 +1601,8 @@ function ProductCard({
 }) {
   const v = product.variants[0];
   const imageUrl = product.images?.[0]?.url;
-  const inStock = v?.inStock ?? false;
+  const hasVariants = product.variants.length > 1;
+  const inStock = product.variants.some(v => v.inStock);
 
   // Non-classic templates use a flat (no-flip) card themed by accent + variant.
   if (variant !== "flip") {
@@ -1675,13 +1689,13 @@ function ProductCard({
               </div>
             )}
             <button
-              onClick={() => v && onAddToCart(product, v.id, 1)}
+              onClick={() => hasVariants ? onViewDetails(product) : (v && onAddToCart(product, v.id, 1))}
               disabled={!inStock}
               className={`w-full text-xs font-semibold py-2 rounded transition-colors ${
                 inStock ? "bg-orange-500 hover:bg-orange-600 text-white" : "bg-gray-600 text-gray-400 cursor-not-allowed"
               }`}
             >
-              {inStock ? "+ Add to Cart" : "Out of Stock"}
+              {inStock ? (hasVariants ? "Select Options" : "+ Add to Cart") : "Out of Stock"}
             </button>
             <button
               onClick={() => onViewDetails(product)}
@@ -1712,7 +1726,8 @@ function FlatProductCard({
 }) {
   const v = product.variants[0];
   const imageUrl = product.images?.[0]?.url;
-  const inStock = v?.inStock ?? false;
+  const hasVariants = product.variants.length > 1;
+  const inStock = product.variants.some(v => v.inStock);
 
   const dark = variant === "bold";
   const compact = variant === "compact";
@@ -1774,16 +1789,16 @@ function FlatProductCard({
             {v && <span className={cn(boutique ? "text-base font-semibold" : "text-lg font-extrabold")} style={{ color: dark ? accent : undefined }}>R{v.price.toFixed(2)}</span>}
           </div>
           <button
-            onClick={() => v && inStock && onAddToCart(product, v.id, 1)}
+            onClick={() => hasVariants ? onViewDetails(product) : (v && inStock && onAddToCart(product, v.id, 1))}
             disabled={!inStock}
-            title={inStock ? "Add to cart" : "Out of stock"}
+            title={inStock ? (hasVariants ? "Select options" : "Add to cart") : "Out of stock"}
             className={cn(
               "shrink-0 rounded-lg font-semibold transition-transform active:scale-95 text-white disabled:opacity-40 disabled:cursor-not-allowed",
               compact ? "h-8 w-8 flex items-center justify-center text-base" : "px-3 py-2 text-xs",
             )}
             style={{ background: inStock ? accent : "#9ca3af" }}
           >
-            {compact ? "+" : inStock ? "Add to Cart" : "Sold Out"}
+            {compact ? "+" : inStock ? (hasVariants ? "Select Options" : "Add to Cart") : "Sold Out"}
           </button>
         </div>
       </div>

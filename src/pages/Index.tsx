@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import { getWaNotifSettings, playWaSound, type WaNotifSettings } from "@/lib/waNotificationService";
 import { supabase, supabaseServiceRole, sbInsertComment } from "@/lib/supabase";
 import { useActivityTracking } from "@/hooks";
 import { logActivity } from "@/lib/activityTrackingService";
@@ -70,6 +71,7 @@ import { TaskCreationListPage } from "@/pages/TaskCreationListPage";
 import { ActivityReportPage } from "@/pages/ActivityReportPage";
 import { AuditLogPage } from "@/pages/AuditLogPage";
 import { WhatsAppMessengerPage } from "@/pages/WhatsAppMessengerPage";
+import { WhatsAppDirectPage } from "@/pages/WhatsAppDirectPage";
 import { StaffDashboardPage } from "@/pages/StaffDashboardPage";
 import { FaultReportDialog } from "@/components/crm/FaultReportDialog";
 import { ChangePasswordDialog } from "@/components/crm/ChangePasswordDialog";
@@ -196,6 +198,54 @@ export default function Index() {
     const timer = setInterval(refresh, 2 * 60 * 1000);
     return () => clearInterval(timer);
   }, [workspaceId, user]);
+
+  // WhatsApp unread count — live via Supabase Realtime + sound + recurring reminder
+  const prevWaUnreadRef  = useRef<number>(0);
+  const waSettingsRef    = useRef<WaNotifSettings>(getWaNotifSettings());
+  const lastReminderRef  = useRef<number>(0);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    let initialised = false;
+
+    const fetchWaUnread = async () => {
+      const { data } = await supabase
+        .from("whatsapp_conversations")
+        .select("unread_count")
+        .eq("workspace_id", workspaceId);
+      if (!data) return;
+      const total = data.reduce((n: number, r: any) => n + (r.unread_count ?? 0), 0);
+      if (initialised && total > prevWaUnreadRef.current) {
+        playWaSound(waSettingsRef.current.sound);
+        lastReminderRef.current = Date.now();
+      }
+      prevWaUnreadRef.current = total;
+      initialised = true;
+      setWhatsappUnreadCount(total);
+    };
+
+    fetchWaUnread();
+    const channel = supabase.channel("wa_unread_index")
+      .on("postgres_changes", { event: "*", schema: "public", table: "whatsapp_conversations", filter: `workspace_id=eq.${workspaceId}` }, fetchWaUnread)
+      .subscribe();
+
+    // Recurring reminder — check every 30s, fire when interval elapsed and unread > 0
+    const reminder = setInterval(() => {
+      const s = waSettingsRef.current;
+      if (s.reminderMinutes === 0 || s.sound === "none") return;
+      if (prevWaUnreadRef.current === 0) return;
+      const elapsed = (Date.now() - lastReminderRef.current) / 1000 / 60;
+      if (elapsed >= s.reminderMinutes) {
+        playWaSound(s.sound);
+        lastReminderRef.current = Date.now();
+      }
+    }, 30_000);
+
+    return () => {
+      supabase.removeChannel(channel);
+      clearInterval(reminder);
+    };
+  }, [workspaceId]);
   const isMobile = useIsMobile();
   
   const { toast } = useToast();
@@ -325,6 +375,7 @@ export default function Index() {
   const [showInventory, setShowInventory] = useState(false);
   const [showEmail, setShowEmail] = useState(false);
   const [emailUnreadCount, setEmailUnreadCount] = useState(0);
+  const [whatsappUnreadCount, setWhatsappUnreadCount] = useState(0);
   const [showStockMovements, setShowStockMovements] = useState(false);
   const [showQuotations, setShowQuotations] = useState(false);
   const [showInvoicing, setShowInvoicing] = useState(false);
@@ -338,6 +389,8 @@ export default function Index() {
   const [showActivityReports, setShowActivityReports] = useState(false);
   const [showAuditLog, setShowAuditLog] = useState(false);
   const [showWhatsAppMessenger, setShowWhatsAppMessenger] = useState(false);
+  const [showWhatsAppDirect, setShowWhatsAppDirect]       = useState(false);
+  const [whatsappDirectUnreadCount, setWhatsappDirectUnreadCount] = useState(0);
   const [showStaffDashboard, setShowStaffDashboard] = useState(false);
   const [showMorningBriefing, setShowMorningBriefing] = useState(false);
   const [showDataSheets, setShowDataSheets] = useState(false);
@@ -551,6 +604,7 @@ export default function Index() {
     setShowActivityReports(false);
     setShowAuditLog(false);
     setShowWhatsAppMessenger(false);
+    setShowWhatsAppDirect(false);
     setShowStaffDashboard(false);
     setShowDataSheets(false);
     setShowWalkInSale(false);
@@ -3044,6 +3098,8 @@ export default function Index() {
           onOpenActivityReports={() => { closeAllOverlays(); setShowActivityReports(true); }}
           onOpenAuditLog={() => { closeAllOverlays(); setShowAuditLog(true); }}
           onOpenWhatsAppMessenger={() => { closeAllOverlays(); setShowWhatsAppMessenger(true); }}
+          onOpenWhatsAppDirect={() => { closeAllOverlays(); setShowWhatsAppDirect(true); }}
+          whatsappDirectUnreadCount={whatsappDirectUnreadCount}
           onOpenStaffDashboard={() => { closeAllOverlays(); setShowStaffDashboard(true); }}
           onOpenTaskCreationList={() => { closeAllOverlays(); setShowTaskCreationList(true); }}
           onOpenSalesOverview={() => { closeAllOverlays(); setShowSalesOverview(true); }}
@@ -3066,6 +3122,7 @@ export default function Index() {
           onOpenEmail={() => { closeAllOverlays(); setShowEmail(true); }}
           onOpenEmailSettings={() => setShowEmailSettings(true)}
           emailUnreadCount={emailUnreadCount}
+          whatsappUnreadCount={whatsappUnreadCount}
           onOpenEcommerceSettings={() => { setEcommerceSettingsTab(undefined); setShowEcommerceSettings(true); }}
           onOpenEcommercePayments={() => { setEcommerceSettingsTab("payments"); setShowEcommerceSettings(true); }}
           onOpenStoreDesign={() => setShowStoreDesign(true)}
@@ -3530,6 +3587,14 @@ export default function Index() {
           {showWhatsAppMessenger && (
             <WhatsAppMessengerPage
               onClose={() => setShowWhatsAppMessenger(false)}
+              onUnreadCountChange={setWhatsappUnreadCount}
+              onSettingsChange={s => { waSettingsRef.current = s; }}
+            />
+          )}
+          {showWhatsAppDirect && (
+            <WhatsAppDirectPage
+              onClose={() => setShowWhatsAppDirect(false)}
+              onUnreadCountChange={setWhatsappDirectUnreadCount}
             />
           )}
           {showActivityReports && (

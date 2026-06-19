@@ -4,7 +4,7 @@
  */
 
 import { useState, useEffect, useMemo } from "react";
-import { ArrowLeft, Save, Send, X, Download, ChevronDown } from "lucide-react";
+import { ArrowLeft, Save, Send, X, Download, ChevronDown, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +23,7 @@ import { Task, CustomFieldDefinition } from "@/types/crm";
 import { SUPABASE_URL,  supabase } from "@/lib/supabase";
 import { getEffectiveSmtp, saveSentEmail } from "@/lib/emailAccountService";
 import { generateQuotationHTML, downloadQuotation, generateQuotationPDFBlob } from "@/lib/pdfService";
+import { sendPDFViaWhatsApp } from "@/lib/whatsappPdfService";
 import { loadSalesSettings } from "@/lib/salesSettingsService";
 import { FieldMapping, resolveField, resolveTemplate } from "@/lib/fieldMapperService";
 
@@ -126,6 +127,7 @@ export function QuotationCreationPage({ onClose, onSaved, editingQuotation, from
 
   const [inventory, setInventory] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [sendingWA, setSendingWA] = useState(false);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -695,6 +697,69 @@ export function QuotationCreationPage({ onClose, onSaved, editingQuotation, from
           }} disabled={loading}>
             <Download className="h-4 w-4 mr-2" />
             Download PDF
+          </Button>
+          <Button variant="outline" disabled={loading || sendingWA || !customerPhone} onClick={async () => {
+            setSendingWA(true);
+            try {
+              const isWalkin = selectedCustomerId === WALKIN_ID;
+              const customer = isWalkin
+                ? { id: WALKIN_ID, companyName: walkinName.trim() || "Cash Sale", contactPerson: walkinName.trim() || "Cash Sale", phone: customerPhone, email: customerEmail }
+                : customers.find((c) => c.id === selectedCustomerId);
+              const customerName = (customer as any)?.companyName || (customer as any)?.contactPerson || "Customer";
+              const currentTaxRate = vatEnabled ? vatRate : 0;
+              const qItems = items.map((item, i) => ({
+                id: `item_${i}`, productName: item.productService, sku: item.sku || "",
+                description: item.description || "", quantity: item.quantity, price: item.rate,
+                total: item.amount, taxRate: currentTaxRate,
+              }));
+              const sub = qItems.reduce((s, i) => s + i.total, 0);
+              const disc = (sub * discountPercent) / 100;
+              const taxable = sub - disc;
+              const tax = (taxable * currentTaxRate) / 100;
+              const q = {
+                id: editingQuotation?.id || `preview_${Date.now()}`,
+                quotationNumber, customerId: selectedCustomerId, customerName,
+                customerCompanyName: customerCompanyName || undefined,
+                customerContactName: customerContactName || undefined,
+                customerEmail, customerPhone,
+                billingAddress: billingAddrObj || undefined,
+                shippingAddress: shippingAddrObj || undefined,
+                customerAccountNumber: customerAccountNum || undefined,
+                items: qItems as any, subtotal: sub, discountPercent, discountAmount: disc,
+                taxRate: currentTaxRate, taxAmount: tax, total: taxable + tax,
+                deposit: deposit || undefined,
+                balanceDue: deposit > 0 ? (taxable + tax) - deposit : undefined,
+                status: (editingQuotation?.status || "draft") as any,
+                validUntil, terms, notes,
+                createdAt: editingQuotation?.createdAt || new Date().toISOString(),
+                workspaceId: workspaceId || "",
+              };
+              const salesSettings = await loadSalesSettings(workspaceId || "");
+              const blob = await generateQuotationPDFBlob(q as any, salesSettings);
+              const fname = `Quote-${quotationNumber}.pdf`;
+              const result = await sendPDFViaWhatsApp({
+                blob, filename: fname, phone: customerPhone,
+                contactName: customerName, workspaceId: workspaceId || "",
+                sentByName: user?.email ?? "Staff",
+              });
+              if (result.success) {
+                toast({
+                  title: result.queued ? "PDF Queued ✓" : "PDF Sent via WhatsApp ✓",
+                  description: result.queued
+                    ? "24hr window expired — re-opener sent. PDF will deliver when client replies."
+                    : `${fname} sent to ${customerPhone}. Check WhatsApp Messenger to continue the chat.`,
+                });
+              } else {
+                toast({ title: "WhatsApp Send Failed", description: result.error, variant: "destructive" });
+              }
+            } catch (e: any) {
+              toast({ title: "WhatsApp Send Failed", description: e.message || "Failed", variant: "destructive" });
+            } finally {
+              setSendingWA(false);
+            }
+          }}>
+            <MessageCircle className="h-4 w-4 mr-2" />
+            {sendingWA ? "Sending…" : "WhatsApp PDF"}
           </Button>
           <Button variant="outline" onClick={() => handleSave(false)} disabled={loading}>
             <Save className="h-4 w-4 mr-2" />

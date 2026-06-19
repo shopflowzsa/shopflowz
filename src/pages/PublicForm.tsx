@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { CheckCircle2, Loader2, ShieldAlert } from "lucide-react";
+import { CheckCircle2, Loader2, ShieldAlert, Users, Link2 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { CustomFieldDefinition, FormDefinition, FormFieldMapping, Task } from "@/types/crm";
 import {
   loadPublicForm,
@@ -67,6 +68,17 @@ export default function PublicForm() {
   // Sync guard — prevents double-submit before React re-render disables the button
   const isSubmittingRef = useRef(false);
   const isClaimingJobNumberRef = useRef(false);
+
+  // ── Multi-item booking ─────────────────────────────────────────────────────
+  // 'ask'    → show "How many items?" screen
+  // 'shared' → show shared-fields sub-form (only when totalItems > 1)
+  // 'item'   → show the per-item form (normal flow, with shared fields pre-filled)
+  const [multiStep, setMultiStep] = useState<'ask' | 'shared' | 'item'>('item');
+  const [totalItems, setTotalItems] = useState(1);
+  const [currentItem, setCurrentItem] = useState(1);
+  const [itemCountInput, setItemCountInput] = useState("1");
+  const [sharedValues, setSharedValues] = useState<Record<string, string | boolean>>({});
+  const [completedItems, setCompletedItems] = useState(0);
   // Stale-task block state. If `block.blocked` is true, the form refuses to
   // render until a supervisor enters a valid bypass code.
   const [block, setBlock] = useState<FormStaleBlock | null>(null);
@@ -110,6 +122,10 @@ export default function PublicForm() {
           defaults[field.id] = field.type === "checkbox" ? false : "";
         });
         setValues(defaults);
+        // If this form has shared fields, start with the item-count screen
+        if (result.form.fields.some(f => f.shared)) {
+          setMultiStep('ask');
+        }
       })
       .catch(() => setNotFound(true))
       .finally(() => setPageLoading(false));
@@ -221,6 +237,64 @@ export default function PublicForm() {
     });
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
+  };
+
+  // Validate only the shared fields (used on the shared-fields sub-form step)
+  const validateShared = (): boolean => {
+    if (!form) return false;
+    const newErrors: Record<string, string> = {};
+    form.fields.filter(f => f.shared).forEach(field => {
+      if (field.required) {
+        const val = sharedValues[field.id];
+        if (val === undefined || val === "" || val === false) {
+          newErrors[field.id] = `${field.label} is required`;
+        }
+      }
+      if (field.type === "email" && sharedValues[field.id] && typeof sharedValues[field.id] === "string") {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sharedValues[field.id] as string)) {
+          newErrors[field.id] = "Invalid email address";
+        }
+      }
+    });
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleItemCountStart = () => {
+    const count = parseInt(itemCountInput, 10);
+    if (!count || isNaN(count) || count < 1) return;
+    const clamped = Math.min(Math.max(count, 1), 50);
+    setTotalItems(clamped);
+    setCurrentItem(1);
+    setCompletedItems(0);
+
+    if (clamped === 1) {
+      // Single item — go straight to normal form
+      setMultiStep('item');
+    } else {
+      // Multiple items — collect shared values first
+      const sharedDefaults: Record<string, string | boolean> = {};
+      form!.fields.filter(f => f.shared).forEach(f => {
+        sharedDefaults[f.id] = f.type === "checkbox" ? false : "";
+      });
+      setSharedValues(sharedDefaults);
+      setErrors({});
+      setMultiStep('shared');
+    }
+  };
+
+  const handleSharedContinue = () => {
+    if (!validateShared()) return;
+    // Pre-fill the main form with the shared values
+    setValues(prev => {
+      const updated = { ...prev };
+      form!.fields.filter(f => f.shared).forEach(f => {
+        updated[f.id] = sharedValues[f.id] ?? (f.type === "checkbox" ? false : "");
+      });
+      return updated;
+    });
+    setErrors({});
+    setMultiStep('item');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -362,7 +436,25 @@ export default function PublicForm() {
         }
       }
       setReservedJobNumber(null);
-      setSubmitted(true);
+
+      const justCompleted = completedItems + 1;
+      setCompletedItems(justCompleted);
+
+      if (multiStep === 'item' && totalItems > 1 && justCompleted < totalItems) {
+        // More items left — reset non-shared fields and advance to next item
+        setCurrentItem(prev => prev + 1);
+        const defaults: Record<string, string | boolean> = {};
+        form.fields.forEach(f => { defaults[f.id] = f.type === "checkbox" ? false : ""; });
+        form.fields.filter(f => f.shared).forEach(f => {
+          defaults[f.id] = sharedValues[f.id] ?? (f.type === "checkbox" ? false : "");
+        });
+        setValues(defaults);
+        setErrors({});
+        setLastPrint(null);
+        // reservedJobNumber is now null — the useEffect will claim a new one
+      } else {
+        setSubmitted(true);
+      }
     } catch (err) {
       console.error("Submission failed", err);
       setErrors({ _form: "Submission failed. Please try again." });
@@ -372,14 +464,18 @@ export default function PublicForm() {
     }
   };
 
-  const renderField = (field: FormFieldMapping) => {
-    const val = values[field.id];
+  const renderField = (
+    field: FormFieldMapping,
+    currentValues: Record<string, string | boolean> = values,
+    onChangeField: (id: string, val: string | boolean) => void = (id, v) => setValues(prev => ({ ...prev, [id]: v })),
+  ) => {
+    const val = currentValues[field.id];
     const error = errors[field.id];
 
     const inputProps = {
       value: typeof val === "string" ? val : "",
       onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-        setValues(prev => ({ ...prev, [field.id]: e.target.value })),
+        onChangeField(field.id, e.target.value),
       className: error ? "border-destructive" : "",
     };
 
@@ -390,7 +486,7 @@ export default function PublicForm() {
             <Checkbox
               id={field.id}
               checked={val as boolean}
-              onCheckedChange={(checked) => setValues(prev => ({ ...prev, [field.id]: !!checked }))}
+              onCheckedChange={(checked) => onChangeField(field.id, !!checked)}
             />
             <Label htmlFor={field.id} className="text-sm">{field.label}{field.required && <span className="text-destructive ml-0.5">*</span>}</Label>
           </div>
@@ -399,7 +495,7 @@ export default function PublicForm() {
         return (
           <div className="space-y-1.5">
             <Label className="text-sm">{field.label}{field.required && <span className="text-destructive ml-0.5">*</span>}</Label>
-            <Select value={val as string} onValueChange={(v) => setValues(prev => ({ ...prev, [field.id]: v }))}>
+            <Select value={val as string} onValueChange={(v) => onChangeField(field.id, v)}>
               <SelectTrigger className={error ? "border-destructive" : ""}><SelectValue placeholder={`Select ${field.label}`} /></SelectTrigger>
               <SelectContent>
                 {field.options?.map(opt => (
@@ -480,13 +576,20 @@ export default function PublicForm() {
   }
 
   if (submitted) {
+    const isMultiBatch = totalItems > 1;
     return (
       <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
         <Card className="w-full max-w-md">
           <CardContent className="p-8 text-center">
             <CheckCircle2 className="h-12 w-12 text-primary mx-auto mb-4" />
-            <h2 className="text-lg font-semibold mb-2">Submission Received</h2>
-            <p className="text-sm text-muted-foreground mb-4">Your form has been submitted successfully and a task has been created.</p>
+            <h2 className="text-lg font-semibold mb-2">
+              {isMultiBatch ? `All ${totalItems} Items Booked!` : "Submission Received"}
+            </h2>
+            <p className="text-sm text-muted-foreground mb-4">
+              {isMultiBatch
+                ? `${totalItems} job cards were created successfully.`
+                : "Your form has been submitted successfully and a task has been created."}
+            </p>
             {lastPrint && form?.stickerEnabled && (
               <Button
                 variant="default"
@@ -532,13 +635,21 @@ export default function PublicForm() {
               setLastPrint(null);
               setReservedJobNumber(null);
               isSubmittingRef.current = false;
+              // Reset multi-item state
+              const hasShared = form?.fields.some(f => f.shared) ?? false;
+              setMultiStep(hasShared ? 'ask' : 'item');
+              setTotalItems(1);
+              setCurrentItem(1);
+              setCompletedItems(0);
+              setItemCountInput("1");
+              setSharedValues({});
               if (form) {
                 const defaults: Record<string, string | boolean> = {};
                 form.fields.forEach(f => { defaults[f.id] = f.type === "checkbox" ? false : ""; });
                 setValues(defaults);
               }
             }}>
-              Submit Another
+              {isMultiBatch ? "New Batch" : "Submit Another"}
             </Button>
           </CardContent>
         </Card>
@@ -683,10 +794,107 @@ export default function PublicForm() {
     );
   }
 
+  // ── Step: "How many items?" ────────────────────────────────────────────────
+  if (multiStep === 'ask') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="text-xl flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              {form.name}
+            </CardTitle>
+            <CardDescription>How many items is the client dropping off?</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-sm">Number of items</Label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={itemCountInput}
+                onChange={e => setItemCountInput(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleItemCountStart()}
+                className="text-2xl font-bold h-14 text-center tabular-nums"
+                autoFocus
+              />
+            </div>
+            <Button className="w-full" onClick={handleItemCountStart} disabled={!itemCountInput || parseInt(itemCountInput, 10) < 1}>
+              {parseInt(itemCountInput, 10) > 1
+                ? `Continue — fill shared info for ${parseInt(itemCountInput, 10) || "?"} items`
+                : "Continue"}
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ── Step: Shared fields (same across all items) ────────────────────────────
+  if (multiStep === 'shared') {
+    const sharedFields = form.fields.filter(f => f.shared);
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
+        <Card className="w-full max-w-lg">
+          <CardHeader>
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2.5">
+              <Link2 className="h-4 w-4 text-blue-600 shrink-0" />
+              <div>
+                <p className="text-xs font-semibold text-blue-800">Booking {totalItems} items</p>
+                <p className="text-xs text-blue-600">These details are the same for all {totalItems} items — enter once</p>
+              </div>
+            </div>
+            <CardTitle className="text-xl">{form.name}</CardTitle>
+            <CardDescription>Shared client information</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              {sharedFields.map(field => (
+                <div key={field.id}>
+                  {renderField(
+                    field,
+                    sharedValues,
+                    (id, v) => setSharedValues(prev => ({ ...prev, [id]: v })),
+                  )}
+                  {errors[field.id] && (
+                    <p className="text-xs text-destructive mt-1">{errors[field.id]}</p>
+                  )}
+                </div>
+              ))}
+              <Button className="w-full mt-2" onClick={handleSharedContinue}>
+                Continue to Item 1 of {totalItems}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  // ── Per-item form (normal flow, shared fields pre-filled) ──────────────────
+  const isMultiBatch = totalItems > 1;
+  const isLastItem = currentItem >= totalItems;
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/30 p-4">
       <Card className="w-full max-w-lg">
         <CardHeader>
+          {isMultiBatch && (
+            <div className="mb-3 flex items-center justify-between rounded-md border border-blue-200 bg-blue-50 px-4 py-2">
+              <span className="text-sm font-semibold text-blue-800">
+                Item {currentItem} of {totalItems}
+              </span>
+              <div className="flex gap-1">
+                {Array.from({ length: totalItems }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-2 w-2 rounded-full ${i < currentItem - 1 ? "bg-emerald-500" : i === currentItem - 1 ? "bg-blue-500" : "bg-blue-200"}`}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
           <div className="mb-3 rounded-md border border-primary/20 bg-primary/5 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Job Number</p>
             <p className="mt-1 font-mono text-3xl font-bold text-primary tabular-nums">
@@ -694,12 +902,22 @@ export default function PublicForm() {
             </p>
           </div>
           <CardTitle className="text-xl">{form.name}</CardTitle>
-          <CardDescription>Fill out the form below to submit</CardDescription>
+          <CardDescription>
+            {isMultiBatch ? `Item ${currentItem} of ${totalItems} — fill in the details below` : "Fill out the form below to submit"}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {form.fields.map(field => (
               <div key={field.id}>
+                {isMultiBatch && field.shared && (
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <Badge variant="outline" className="text-[10px] h-4 px-1.5 border-blue-300 text-blue-600 bg-blue-50">
+                      <Link2 className="h-2.5 w-2.5 mr-0.5" />Shared
+                    </Badge>
+                    <span className="text-[10px] text-muted-foreground">Same for all {totalItems} items</span>
+                  </div>
+                )}
                 {renderField(field)}
                 {errors[field.id] && (
                   <p className="text-xs text-destructive mt-1">{errors[field.id]}</p>
@@ -710,7 +928,11 @@ export default function PublicForm() {
               <p className="text-sm text-destructive text-center">{errors._form}</p>
             )}
             <Button type="submit" className="w-full mt-2" disabled={submitting}>
-              {submitting ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Submitting…</> : "Submit"}
+              {submitting
+                ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />{isMultiBatch ? `Submitting item ${currentItem}…` : "Submitting…"}</>
+                : isMultiBatch
+                  ? isLastItem ? `Submit Item ${currentItem} (Last)` : `Submit Item ${currentItem} — Next: Item ${currentItem + 1}`
+                  : "Submit"}
             </Button>
           </form>
         </CardContent>

@@ -413,6 +413,148 @@ export function FormBuilder({ open, onClose, onSave, existingForm, lists, custom
             </div>
           </div>
 
+          <Separator />
+
+          {/* Form Fields — placed near the top so they're easy to find */}
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <Label className="text-sm font-medium">Form Fields</Label>
+              <Button variant="outline" size="sm" onClick={addField} className="h-7 text-xs">
+                <Plus className="h-3 w-3 mr-1" /> Add Field
+              </Button>
+            </div>
+
+            <div className="space-y-2">
+              {fields.map((field, index) => (
+                <div key={field.id} className="border border-border rounded-lg p-3 space-y-2 bg-card">
+                  <div className="flex items-center gap-2">
+                    <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <Input
+                      value={field.label}
+                      onChange={(e) => updateField(field.id, { label: e.target.value })}
+                      placeholder="Field label"
+                      className="h-8 text-sm flex-1"
+                    />
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveField(index, -1)} disabled={index === 0}>
+                        <ArrowUp className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveField(index, 1)} disabled={index === fields.length - 1}>
+                        <ArrowDown className="h-3 w-3" />
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeField(field.id)}>
+                        <Trash2 className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    <Select value={field.type || "text"} onValueChange={(v) => updateField(field.id, { type: v as CustomFieldType })}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {FIELD_TYPES.map(t => (
+                          <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={field.mapTo || "customField"} onValueChange={(v) => updateField(field.id, { mapTo: v as "title" | "description" | "customField", customFieldId: undefined })}>
+                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="title">→ Task Title</SelectItem>
+                        <SelectItem value="description">→ Description</SelectItem>
+                        <SelectItem value="customField">→ Custom Field</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    {field.mapTo === "customField" && (
+                      <Select
+                        value={
+                          field.customFieldId && availableCustomFields.find(cf => cf.id === field.customFieldId)
+                            ? field.customFieldId
+                            : ""
+                        }
+                        onValueChange={(v) => updateField(field.id, { customFieldId: v })}
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue placeholder="Select field" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableCustomFields.length === 0 ? (
+                            <SelectItem value="no-fields" disabled>No custom fields available for this list</SelectItem>
+                          ) : (
+                            <>
+                              {field.customFieldId && !availableCustomFields.find(cf => cf.id === field.customFieldId) && (
+                                <SelectItem value={field.customFieldId} disabled className="text-amber-600">
+                                  ⚠️ Field not found - please select another
+                                </SelectItem>
+                              )}
+                              {availableCustomFields.map(cf => (
+                                <SelectItem key={cf.id} value={cf.id}>{cf.name}</SelectItem>
+                              ))}
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        id={`req-top-${field.id}`}
+                        checked={field.required}
+                        onCheckedChange={(checked) => updateField(field.id, { required: checked })}
+                        className="scale-75"
+                      />
+                      <Label htmlFor={`req-top-${field.id}`} className="text-xs text-muted-foreground">Required</Label>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        id={`shared-top-${field.id}`}
+                        checked={field.shared ?? false}
+                        onCheckedChange={(checked) => updateField(field.id, { shared: checked })}
+                        className="scale-75"
+                      />
+                      <Label htmlFor={`shared-top-${field.id}`} className="text-xs text-muted-foreground" title="Pre-filled once when booking multiple items — staff enters this field only once and it applies to all items">Shared</Label>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[10px] h-5",
+                        field.mapTo === "customField" && field.customFieldId === mapJobNumberToFieldId
+                          ? "border-blue-400 bg-blue-50 text-blue-700"
+                          : field.mapTo === "customField" && field.customFieldId && !availableCustomFields.find(c => c.id === field.customFieldId)
+                          ? "border-amber-400 bg-amber-50 text-amber-700"
+                          : ""
+                      )}
+                    >
+                      {field.mapTo === "title"
+                        ? "Task Title"
+                        : field.mapTo === "description"
+                        ? "Description"
+                        : field.mapTo === "customField" && field.customFieldId === mapJobNumberToFieldId
+                        ? "Auto-filled (job no.)"
+                        : availableCustomFields.find(c => c.id === field.customFieldId)?.name
+                        || (field.customFieldId ? "⚠️ Field not available" : "Unmapped")}
+                    </Badge>
+                  </div>
+
+                  {field.type === "dropdown" && (
+                    <Input
+                      placeholder="Options (comma-separated)"
+                      value={field.options?.join(", ") || ""}
+                      onChange={(e) => updateField(field.id, { options: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })}
+                      className="h-8 text-xs"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <Separator />
+
           {/* Job Number prefix toggle */}
           <div className="space-y-0 rounded-lg border border-border px-4 py-3">
             <div className="flex items-center justify-between">
@@ -1476,136 +1618,6 @@ export function FormBuilder({ open, onClose, onSave, existingForm, lists, custom
             </div>
           )}
 
-          <Separator />
-
-          {/* Form Fields */}
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <Label className="text-sm font-medium">Form Fields</Label>
-              <Button variant="outline" size="sm" onClick={addField} className="h-7 text-xs">
-                <Plus className="h-3 w-3 mr-1" /> Add Field
-              </Button>
-            </div>
-
-            <div className="space-y-2">
-              {fields.map((field, index) => (
-                <div key={field.id} className="border border-border rounded-lg p-3 space-y-2 bg-card">
-                  <div className="flex items-center gap-2">
-                    <GripVertical className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <Input
-                      value={field.label}
-                      onChange={(e) => updateField(field.id, { label: e.target.value })}
-                      placeholder="Field label"
-                      className="h-8 text-sm flex-1"
-                    />
-                    <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveField(index, -1)} disabled={index === 0}>
-                        <ArrowUp className="h-3 w-3" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveField(index, 1)} disabled={index === fields.length - 1}>
-                        <ArrowDown className="h-3 w-3" />
-                      </Button>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => removeField(field.id)}>
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2">
-                    <Select value={field.type || "text"} onValueChange={(v) => updateField(field.id, { type: v as CustomFieldType })}>
-                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {FIELD_TYPES.map(t => (
-                          <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <Select value={field.mapTo || "customField"} onValueChange={(v) => updateField(field.id, { mapTo: v as "title" | "description" | "customField", customFieldId: undefined })}>
-                      <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="title">→ Task Title</SelectItem>
-                        <SelectItem value="description">→ Description</SelectItem>
-                        <SelectItem value="customField">→ Custom Field</SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    {field.mapTo === "customField" && (
-                      <Select 
-                        value={
-                          field.customFieldId && availableCustomFields.find(cf => cf.id === field.customFieldId)
-                            ? field.customFieldId
-                            : ""
-                        } 
-                        onValueChange={(v) => updateField(field.id, { customFieldId: v })}
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="Select field" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {availableCustomFields.length === 0 ? (
-                            <SelectItem value="no-fields" disabled>No custom fields available for this list</SelectItem>
-                          ) : (
-                            <>
-                              {field.customFieldId && !availableCustomFields.find(cf => cf.id === field.customFieldId) && (
-                                <SelectItem value={field.customFieldId} disabled className="text-amber-600">
-                                  ⚠️ Field not found - please select another
-                                </SelectItem>
-                              )}
-                              {availableCustomFields.map(cf => (
-                                <SelectItem key={cf.id} value={cf.id}>{cf.name}</SelectItem>
-                              ))}
-                            </>
-                          )}
-                        </SelectContent>
-                      </Select>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        id={`req-${field.id}`}
-                        checked={field.required}
-                        onCheckedChange={(checked) => updateField(field.id, { required: checked })}
-                        className="scale-75"
-                      />
-                      <Label htmlFor={`req-${field.id}`} className="text-xs text-muted-foreground">Required</Label>
-                    </div>
-                    <Badge 
-                      variant="outline" 
-                      className={cn(
-                        "text-[10px] h-5",
-                        field.mapTo === "customField" && field.customFieldId === mapJobNumberToFieldId
-                          ? "border-blue-400 bg-blue-50 text-blue-700"
-                          : field.mapTo === "customField" && field.customFieldId && !availableCustomFields.find(c => c.id === field.customFieldId)
-                          ? "border-amber-400 bg-amber-50 text-amber-700"
-                          : ""
-                      )}
-                    >
-                      {field.mapTo === "title" 
-                        ? "Task Title" 
-                        : field.mapTo === "description" 
-                        ? "Description" 
-                        : field.mapTo === "customField" && field.customFieldId === mapJobNumberToFieldId
-                        ? "Auto-filled (job no.)"
-                        : availableCustomFields.find(c => c.id === field.customFieldId)?.name 
-                        || (field.customFieldId ? "⚠️ Field not available" : "Unmapped")}
-                    </Badge>
-                  </div>
-
-                  {field.type === "dropdown" && (
-                    <Input
-                      placeholder="Options (comma-separated)"
-                      value={field.options?.join(", ") || ""}
-                      onChange={(e) => updateField(field.id, { options: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })}
-                      className="h-8 text-xs"
-                    />
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         <DialogFooter>

@@ -257,17 +257,17 @@ export function CustomerPage({ onClose }: CustomerPageProps) {
     const term = searchTerm.toLowerCase();
     return customers.filter(
       (c) =>
-        (c.companyName || c.contactPerson).toLowerCase().includes(term) ||
-        c.email.toLowerCase().includes(term) ||
-        c.phone.includes(term) ||
-        c.customerNumber.toLowerCase().includes(term)
+        (c.companyName ?? c.contactPerson ?? "").toLowerCase().includes(term) ||
+        (c.email ?? "").toLowerCase().includes(term) ||
+        (c.phone ?? "").includes(term) ||
+        (c.customerNumber ?? "").toLowerCase().includes(term)
     );
   }, [customers, searchTerm]);
 
   const stats = useMemo(() => {
     const total = customers.length;
-    const totalRevenue = customers.reduce((sum, c) => sum + c.totalInvoiced, 0);
-    const totalOutstanding = customers.reduce((sum, c) => sum + c.outstandingBalance, 0);
+    const totalRevenue = customers.reduce((sum, c) => sum + (c.totalInvoiced ?? 0), 0);
+    const totalOutstanding = customers.reduce((sum, c) => sum + (c.outstandingBalance ?? 0), 0);
     return { total, totalRevenue, totalOutstanding };
   }, [customers]);
 
@@ -308,13 +308,13 @@ export function CustomerPage({ onClose }: CustomerPageProps) {
           <div className="bg-background rounded-lg p-3 border">
             <div className="text-xs text-muted-foreground mb-1">Total Revenue</div>
             <div className="text-2xl font-bold text-green-600">
-              R{stats.totalRevenue.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+              R{(stats.totalRevenue ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
             </div>
           </div>
           <div className="bg-background rounded-lg p-3 border">
             <div className="text-xs text-muted-foreground mb-1">Outstanding</div>
             <div className="text-2xl font-bold text-amber-600">
-              R{stats.totalOutstanding.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+              R{(stats.totalOutstanding ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
             </div>
           </div>
         </div>
@@ -375,7 +375,7 @@ export function CustomerPage({ onClose }: CustomerPageProps) {
                     <div>
                       <span className="text-muted-foreground">Revenue:</span>{" "}
                       <span className="font-semibold text-green-600">
-                        R{customer.totalInvoiced.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                        R{(customer.totalInvoiced ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                       </span>
                     </div>
                     <div>
@@ -384,7 +384,7 @@ export function CustomerPage({ onClose }: CustomerPageProps) {
                         "font-semibold",
                         customer.outstandingBalance > 0 ? "text-amber-600" : "text-muted-foreground"
                       )}>
-                        R{customer.outstandingBalance.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                        R{(customer.outstandingBalance ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                       </span>
                     </div>
                   </div>
@@ -701,19 +701,19 @@ export function CustomerPage({ onClose }: CustomerPageProps) {
                 <div className="bg-muted rounded-lg p-3">
                   <div className="text-xs text-muted-foreground mb-1">Total Invoiced</div>
                   <div className="text-xl font-bold text-green-600">
-                    R{viewCustomer.totalInvoiced.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                    R{(viewCustomer.totalInvoiced ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                   </div>
                 </div>
                 <div className="bg-muted rounded-lg p-3">
                   <div className="text-xs text-muted-foreground mb-1">Total Paid</div>
                   <div className="text-xl font-bold">
-                    R{viewCustomer.totalPaid.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                    R{(viewCustomer.totalPaid ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                   </div>
                 </div>
                 <div className="bg-muted rounded-lg p-3">
                   <div className="text-xs text-muted-foreground mb-1">Balance Due</div>
                   <div className="text-xl font-bold text-amber-600">
-                    R{viewCustomer.outstandingBalance.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                    R{(viewCustomer.outstandingBalance ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                   </div>
                 </div>
               </div>
@@ -734,7 +734,7 @@ export function CustomerPage({ onClose }: CustomerPageProps) {
                           </div>
                           <div className="text-right">
                             <div className="font-semibold">
-                              R{invoice.total.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                              R{(invoice.total ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                             </div>
                             <Badge
                               variant={invoice.status === "paid" ? "default" : "secondary"}

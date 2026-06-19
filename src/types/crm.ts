@@ -99,6 +99,7 @@ export interface Task {
   dueDate?: string;
   assignee?: string;
   assignees?: string[];
+  completedBy?: string[]; // snapshot of assignees at the moment the task was marked done
   comments?: TaskComment[];
   jobNumber?: string;
   photos?: string[];
@@ -117,7 +118,7 @@ export interface Task {
 export type ItemPermission = "inherit" | "editor" | "viewer" | "none";
 
 export type AutomationTriggerType = 'task_created' | 'status_changed_to' | 'task_moved_here' | 'task_in_list' | 'task_always_in_list' | 'start_date_overdue';
-export type AutomationActionType  = 'set_status' | 'assign_members' | 'set_priority' | 'flag_task' | 'move_to_list';
+export type AutomationActionType  = 'set_status' | 'assign_members' | 'unassign_members' | 'set_priority' | 'flag_task' | 'move_to_list';
 
 export interface Automation {
   id: string;
@@ -171,6 +172,7 @@ export interface FormFieldMapping {
   mapTo: "title" | "description" | "customField";
   customFieldId?: string;
   options?: string[];
+  shared?: boolean; // when true, pre-filled from the shared-fields step in multi-item bookings
 }
 
 export interface FormDefinition {

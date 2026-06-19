@@ -53,6 +53,7 @@ export interface WhatsAppSettings {
   flowToken?: string;       // optional flow token (defaults to "unused")
   secondMessage?: SecondMessageConfig; // optional second template sent simultaneously
   ccNumber?: string;        // Business CC number — receives a copy of every booking notification
+  reopenerTemplate?: string; // Template sent to re-open 24hr window before queued message
   templates?: {             // Template configurations for different purposes
     depositInvoice?: string; // Template name for deposit invoices
   };

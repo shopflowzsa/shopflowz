@@ -604,16 +604,16 @@ export function InvoiceManagementPage({ onClose, initialInvoiceId }: InvoiceMana
                       {new Date(invoice.dueDate).toLocaleDateString()}
                     </TableCell>
                     <TableCell className="text-right">
-                      R{invoice.total.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                      R{(invoice.total ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                     </TableCell>
                     <TableCell className="text-right text-green-600">
-                      R{invoice.amountPaid.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                      R{(invoice.amountPaid ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                     </TableCell>
                     <TableCell className={cn(
                       "text-right",
-                      invoice.balanceDue > 0 ? "text-amber-600 font-semibold" : "text-muted-foreground"
+                      (invoice.balanceDue ?? 0) > 0 ? "text-amber-600 font-semibold" : "text-muted-foreground"
                     )}>
-                      R{invoice.balanceDue.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                      R{(invoice.balanceDue ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">

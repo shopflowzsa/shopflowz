@@ -20,7 +20,7 @@ interface AuthContextValue {
   planModules: Record<string, string[]>;
   accessPreviewMemberUid: string | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, displayName: string, phone: string, address: string) => Promise<void>;
+  register: (email: string, password: string, displayName: string, phone: string, address: string, userType?: 'crm_user' | 'store_customer') => Promise<void>;
   logout: () => Promise<void>;
   createGuestSession: () => Promise<void>;
   inviteUser: (email: string, role: Exclude<WorkspaceRole, "owner">, permissions?: MenuPermission[], skipDuplicateCheck?: boolean) => Promise<void>;
@@ -383,14 +383,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function register(email: string, password: string, displayName: string, phone: string, address: string) {
+  async function register(email: string, password: string, displayName: string, phone: string, address: string, userType: 'crm_user' | 'store_customer' = 'crm_user') {
     // Use admin API — bypasses Supabase rate limits and email confirmation requirement
     // so accounts are created instantly without any "too many attempts" errors.
     const { data, error } = await supabaseServiceRole.auth.admin.createUser({
       email,
       password,
       email_confirm: true,
-      user_metadata: { displayName },
+      user_metadata: { displayName, user_type: userType },
     });
     if (error) throw error;
     if (data.user) {

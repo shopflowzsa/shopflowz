@@ -5,7 +5,7 @@ import { exportWorkspaceToZip, type ExportProgress, type ExportOptions, DEFAULT_
 
 import {
   ChevronDown, ChevronRight, Plus,
-  Folder as FolderIcon, FileText, Users, Lock, LogOut, MessageSquare, DollarSign, Clock, BarChart3, BarChart2, Mail, Wrench, Printer, Package, Receipt, TrendingUp, FileSpreadsheet, Store, Building2, Settings, ExternalLink, CreditCard, Map, KeyRound, AlertCircle, Camera, TableProperties, Landmark, ArrowLeftRight, Activity, PieChart, FolderOpen, Bot, Sparkles, EyeOff, Sun, Moon, SunMoon, Bell, Zap, Upload, Download, CheckCircle, XCircle, ShieldAlert,
+  Folder as FolderIcon, FileText, Users, Lock, LogOut, MessageSquare, MessageCircle, DollarSign, Clock, BarChart3, BarChart2, Mail, Wrench, Printer, Package, Receipt, TrendingUp, FileSpreadsheet, Store, Building2, Settings, ExternalLink, CreditCard, Map, KeyRound, AlertCircle, Camera, TableProperties, Landmark, ArrowLeftRight, Activity, PieChart, FolderOpen, Bot, Sparkles, EyeOff, Sun, Moon, SunMoon, Bell, Zap, Upload, Download, CheckCircle, XCircle, ShieldAlert,
   ShoppingBag as ShoppingBagIcon,
 } from "lucide-react";
 import {
@@ -101,6 +101,8 @@ interface CrmSidebarProps {
   onOpenAuditLog?: () => void;
   onOpenWhatsAppMessenger?: () => void;
   whatsappUnreadCount?: number;
+  onOpenWhatsAppDirect?: () => void;
+  whatsappDirectUnreadCount?: number;
 }
 
 export function CrmSidebar({
@@ -109,7 +111,7 @@ export function CrmSidebar({
   onRenameSpace, onRenameFolder, onRenameList,
   onDeleteSpace, onDeleteFolder, onDeleteList,
   onOpenCustomFields, onTaskStatuses, onOpenForms, onOpenAccounts,
-  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount,
+  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount, onOpenWhatsAppDirect, whatsappDirectUnreadCount,
 }: CrmSidebarProps) {
   const { state } = useSidebar();
   const {
@@ -850,6 +852,39 @@ export function CrmSidebar({
                     {(whatsappUnreadCount ?? 0) > 0 && (
                       <span className="ml-auto text-xs font-bold bg-green-500 text-white rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center leading-none">
                         {(whatsappUnreadCount ?? 0) > 99 ? "99+" : whatsappUnreadCount}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          )}
+
+          {/* ── WhatsApp Second Number ── */}
+          {hasPermission("whatsapp") && !moduleHidden("whatsapp") && onOpenWhatsAppDirect && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              onClick={onOpenWhatsAppDirect}
+              className="group hover:bg-emerald-900/40 rounded-md text-emerald-400"
+              title="WhatsApp 2 — second official WhatsApp Business number"
+            >
+              <div className="flex items-center gap-2 w-full">
+                <div className="relative shrink-0">
+                  <MessageCircle className="h-4 w-4" />
+                  {(whatsappDirectUnreadCount ?? 0) > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-600" />
+                    </span>
+                  )}
+                </div>
+                {!collapsed && (
+                  <>
+                    <span className="text-sm font-medium truncate flex-1">WhatsApp 2</span>
+                    {(whatsappDirectUnreadCount ?? 0) > 0 && (
+                      <span className="ml-auto text-xs font-bold bg-emerald-600 text-white rounded-full px-1.5 py-0.5 min-w-[1.25rem] text-center leading-none">
+                        {(whatsappDirectUnreadCount ?? 0) > 99 ? "99+" : whatsappDirectUnreadCount}
                       </span>
                     )}
                   </>

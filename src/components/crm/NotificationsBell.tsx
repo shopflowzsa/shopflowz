@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Bell, ShoppingBag, MessageSquare, Info, CheckCheck, X, RefreshCw } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { getNotifications, markAllNotificationsRead, clearNotifications, type AppNotification } from "@/lib/notificationService";
-import { supabase, supabaseServiceRole } from "@/lib/supabase";
+import { supabaseServiceRole, sbUpsertTask } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 120_000;
@@ -68,23 +68,38 @@ export function NotificationsBell({ collapsed, onOpenLink }: { collapsed?: boole
     if (!jobNumber || !workspaceId) return;
     setRetrying(prev => new Set(prev).add(n.id));
     try {
-      const { data } = await supabaseServiceRole
+      // 1st attempt: job_log backup (fast, has full task snapshot)
+      const { data: logRow } = await supabaseServiceRole
         .from("job_log")
         .select("full_task")
         .eq("workspace_id", workspaceId)
         .eq("job_number", jobNumber)
         .maybeSingle();
-      if (!data?.full_task) {
-        setRetryResult(prev => new Map(prev).set(n.id, "not-found"));
+
+      if (logRow?.full_task) {
+        await sbUpsertTask(workspaceId, logRow.full_task);
+        setRetryResult(prev => new Map(prev).set(n.id, "ok"));
         return;
       }
-      const { error } = await supabase.rpc("append_task_to_workspace", {
-        p_workspace_id: workspaceId,
-        p_task: data.full_task,
-        p_job_counter: 0,
-      });
-      if (error) throw error;
-      setRetryResult(prev => new Map(prev).set(n.id, "ok"));
+
+      // 2nd attempt: tasks table — job_log backup can fail silently, but the
+      // task is still in the tasks table if the DB insert completed (e.g. it
+      // booked and printed). Upserting the existing row fires a realtime UPDATE
+      // so the UI picks it up without a page refresh.
+      const { data: taskRows } = await supabaseServiceRole
+        .from("tasks")
+        .select("id, data")
+        .eq("workspace_id", workspaceId)
+        .filter("data->>jobNumber", "eq", jobNumber);
+
+      const found = taskRows?.find((r: any) => r.data);
+      if (found?.data) {
+        await sbUpsertTask(workspaceId, found.data);
+        setRetryResult(prev => new Map(prev).set(n.id, "ok"));
+        return;
+      }
+
+      setRetryResult(prev => new Map(prev).set(n.id, "not-found"));
     } catch (err) {
       console.error("[NotifRetry] failed:", err);
       setRetryResult(prev => new Map(prev).set(n.id, "error"));
@@ -180,7 +195,7 @@ export function NotificationsBell({ collapsed, onOpenLink }: { collapsed?: boole
                           {n.body && <p className="text-xs text-gray-500 truncate">{n.body}</p>}
                           <p className="text-[10px] text-gray-400 mt-0.5">{timeAgo(n.createdAt)}</p>
                           {result === "ok" && <p className="text-[10px] text-emerald-600 font-semibold mt-0.5">✓ Task re-added — refresh to see it</p>}
-                          {result === "not-found" && <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Task data not found in backup log</p>}
+                          {result === "not-found" && <p className="text-[10px] text-amber-600 font-semibold mt-0.5">Task not found — it may have been deleted</p>}
                           {result === "error" && <p className="text-[10px] text-red-500 font-semibold mt-0.5">Retry failed — try again</p>}
                         </div>
                       </button>

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   X, MoveRight, Clock, Send, ArrowLeft, Camera, Upload, Trash2,
   ImagePlus, DollarSign, Package, Plus, Minus, User, Phone, Mail,
@@ -7,6 +7,7 @@ import {
 import { toast } from "sonner";
 import { Checkbox } from "@/components/ui/checkbox";
 import { loadJobSettings } from "@/lib/jobSettingsService";
+import { sbGetComments, sbInsertComment, sbDeleteComment, sbSubscribeComments } from "@/lib/supabase";
 import {
   Task, TaskStatus, TaskPriority, DEFAULT_STATUSES, PRIORITIES,
   CustomFieldDefinition, List, TaskComment, SparePartUsage,
@@ -78,6 +79,7 @@ interface BodyProps {
   formatTimestamp: (ts: string) => string;
   showActivity?: boolean;
   photoLocked?: boolean;
+  workspaceId?: string;
 }
 
 // ── Shared: PropRow ────────────────────────────────────────────────────────────
@@ -308,30 +310,75 @@ function SparePartsSection({ editedTask, setEditedTask, onUpdate, inventoryItems
 // ── ActivitySection ────────────────────────────────────────────────────────────
 type ActivityFilter = "all" | "changes" | "comments" | "moves";
 
-function ActivitySection({ editedTask, setEditedTask, onUpdate, user, formatTimestamp }: {
-  editedTask: Task; setEditedTask: (t: Task) => void; onUpdate: (t: Task) => void;
+function ActivitySection({ editedTask, workspaceId, user, formatTimestamp }: {
+  editedTask: Task; workspaceId: string | undefined;
   user: { displayName?: string | null; email?: string | null } | null;
   formatTimestamp: (ts: string) => string;
 }) {
   const [newComment, setNewComment] = useState("");
   const [filter, setFilter] = useState<ActivityFilter>("all");
+  const [tableComments, setTableComments] = useState<TaskComment[]>([]);
+  const ownInsertIds = useRef<Set<string>>(new Set());
 
-  const handleAddComment = () => {
-    if (!newComment.trim()) return;
+  // Load comments from task_comments table on mount / task change
+  useEffect(() => {
+    let cancelled = false;
+    setTableComments([]);
+    sbGetComments(editedTask.id)
+      .then(rows => {
+        if (!cancelled) setTableComments(rows as unknown as TaskComment[]);
+      })
+      .catch(err => console.warn('[ActivitySection] load comments failed:', err));
+    return () => { cancelled = true; };
+  }, [editedTask.id]);
+
+  // Live subscription — new comments from any user appear instantly
+  useEffect(() => {
+    const unsub = sbSubscribeComments(editedTask.id, {
+      onInsert: (row) => {
+        const c = row as unknown as TaskComment;
+        // Skip echo from our own insert (already applied optimistically)
+        if (ownInsertIds.current.has(c.id)) { ownInsertIds.current.delete(c.id); return; }
+        setTableComments(prev => {
+          if (prev.some(x => x.id === c.id)) return prev;
+          return [...prev, c];
+        });
+      },
+      onDelete: (id) => setTableComments(prev => prev.filter(c => c.id !== id)),
+    });
+    return unsub;
+  }, [editedTask.id]);
+
+  const handleAddComment = async () => {
+    if (!newComment.trim() || !workspaceId) return;
     const displayName = user?.displayName;
     const email = user?.email;
     const author = displayName || (email ? email.split('@')[0] : null) || 'A user';
     const comment: TaskComment = {
-      id: `comment_${Date.now()}`, text: newComment.trim(),
+      id: `comment_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      text: newComment.trim(),
       author,
       createdAt: new Date().toISOString(),
     };
-    const updated: Task = { ...editedTask, comments: [...(editedTask.comments || []), comment] };
-    setEditedTask(updated); onUpdate(updated); setNewComment("");
+    // Optimistic local add
+    ownInsertIds.current.add(comment.id);
+    setTableComments(prev => [...prev, comment]);
+    setNewComment("");
+    try {
+      await sbInsertComment(workspaceId, editedTask.id, comment as unknown as Record<string, unknown>);
+    } catch (err) {
+      console.error('[ActivitySection] insert comment failed:', err);
+      // Roll back optimistic add
+      setTableComments(prev => prev.filter(c => c.id !== comment.id));
+      ownInsertIds.current.delete(comment.id);
+    }
   };
 
-  // Filter + reverse (newest first) + group by day
-  const all = editedTask.comments?.slice() || [];
+  // Merge: table rows are authoritative; fall back to task.comments for legacy
+  // entries that predate the migration (they were already migrated but just in case).
+  const tableIds = new Set(tableComments.map(c => c.id));
+  const legacyOnly = (editedTask.comments || []).filter(c => !tableIds.has(c.id));
+  const all = [...tableComments, ...legacyOnly];
   const filtered = all.filter(c => {
     if (filter === "all") return true;
     if (filter === "comments") return !c.isSystem;
@@ -538,7 +585,9 @@ function actionVerb(action: TaskComment["action"]): string {
 function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibleFields, allLists,
   taskStatuses, inventoryItems, loadingInventory, technicians, members, user, isNative, takePhoto, pickFromGallery,
   handleFileInputChange, fileInputRef, cameraInputRef, formatTimestamp, showActivity = false,
-  photoLocked = false }: BodyProps) {
+  photoLocked = false, workspaceId }: BodyProps) {
+
+  const { myRole } = useAuth();
 
   const getFieldValue = (fieldId: string) => {
     const fv = editedTask.customFieldValues.find(v => v.fieldId === fieldId);
@@ -717,6 +766,7 @@ function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibl
             const COLORS = ["bg-violet-500","bg-blue-500","bg-emerald-500","bg-amber-500","bg-rose-500","bg-pink-500","bg-teal-500","bg-indigo-500"];
             const color = (uid: string) => { let h = 0; for (const c of uid) h = (h * 31 + c.charCodeAt(0)) & 0xffff; return COLORS[h % COLORS.length]; };
             const ini = (name: string) => { const p = name.trim().split(/\s+/); return p.length >= 2 ? (p[0][0]+p[p.length-1][0]).toUpperCase() : name.slice(0,2).toUpperCase(); };
+            const canEditAssignees = myRole === 'owner';
             const remove = (uid: string) => { const u = { ...editedTask, assignees: assignees.filter(id => id !== uid) }; setEditedTask(u); onUpdate(u); };
             const toggle = (uid: string) => { const next = assignees.includes(uid) ? assignees.filter(id => id !== uid) : [...assignees, uid]; const u = { ...editedTask, assignees: next }; setEditedTask(u); onUpdate(u); };
             return (
@@ -724,30 +774,32 @@ function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibl
                 {assignees.map(uid => { const m = members.find(m => m.uid === uid); const name = m?.displayName || m?.email || uid; return (
                   <div key={uid} className={cn("flex items-center gap-1 rounded-full px-1.5 py-0.5 text-white text-[10px] font-semibold", color(uid))}>
                     <span>{ini(name)}</span><span className="max-w-[80px] truncate">{m?.displayName || m?.email}</span>
-                    <button onClick={() => remove(uid)} className="ml-0.5 hover:text-white/70"><X className="h-2.5 w-2.5" /></button>
+                    {canEditAssignees && <button onClick={() => remove(uid)} className="ml-0.5 hover:text-white/70"><X className="h-2.5 w-2.5" /></button>}
                   </div>
                 ); })}
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <button className="flex items-center gap-1 rounded-full border border-dashed border-muted-foreground/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-primary transition-colors">
-                      <UserPlus className="h-2.5 w-2.5" />{assignees.length === 0 ? "Assign" : "Add"}
-                    </button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-52 p-0" align="start">
-                    <div>
-                      <p className="text-xs font-semibold px-2 pt-2 pb-1 text-muted-foreground uppercase tracking-wide">Assign members</p>
-                      <div className="max-h-48 overflow-y-auto pb-1">
-                        {members.map(m => { const assigned = assignees.includes(m.uid); return (
-                          <button key={m.uid} className="w-full flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-accent rounded-sm" onClick={() => toggle(m.uid)}>
-                            <div className={cn("h-5 w-5 rounded-full flex items-center justify-center font-bold text-white shrink-0 text-[9px]", color(m.uid))}>{ini(m.displayName || m.email)}</div>
-                            <span className="flex-1 text-left truncate">{m.displayName || m.email}</span>
-                            {assigned && <Check className="h-3 w-3 text-primary shrink-0" />}
-                          </button>
-                        ); })}
+                {canEditAssignees && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <button className="flex items-center gap-1 rounded-full border border-dashed border-muted-foreground/40 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-primary transition-colors">
+                        <UserPlus className="h-2.5 w-2.5" />{assignees.length === 0 ? "Assign" : "Add"}
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-52 p-0" align="start">
+                      <div>
+                        <p className="text-xs font-semibold px-2 pt-2 pb-1 text-muted-foreground uppercase tracking-wide">Assign members</p>
+                        <div className="max-h-48 overflow-y-auto pb-1">
+                          {members.map(m => { const assigned = assignees.includes(m.uid); return (
+                            <button key={m.uid} className="w-full flex items-center gap-2 px-2 py-1.5 text-xs hover:bg-accent rounded-sm" onClick={() => toggle(m.uid)}>
+                              <div className={cn("h-5 w-5 rounded-full flex items-center justify-center font-bold text-white shrink-0 text-[9px]", color(m.uid))}>{ini(m.displayName || m.email)}</div>
+                              <span className="flex-1 text-left truncate">{m.displayName || m.email}</span>
+                              {assigned && <Check className="h-3 w-3 text-primary shrink-0" />}
+                            </button>
+                          ); })}
+                        </div>
                       </div>
-                    </div>
-                  </PopoverContent>
-                </Popover>
+                    </PopoverContent>
+                  </Popover>
+                )}
               </div>
             );
           })()}
@@ -822,7 +874,7 @@ function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibl
       {showActivity && (
         <div className="space-y-2">
           <SectionHeading icon={<Clock className="h-3.5 w-3.5" />} label="Activity" />
-          <ActivitySection editedTask={editedTask} setEditedTask={setEditedTask} onUpdate={onUpdate}
+          <ActivitySection editedTask={editedTask} workspaceId={workspaceId}
             user={user} formatTimestamp={formatTimestamp} />
         </div>
       )}
@@ -905,7 +957,7 @@ export function TaskDetailPanel({ task, visibleFields, allFields, allLists, form
     inventoryItems, loadingInventory, technicians, members, user,
     isNative, takePhoto, pickFromGallery,
     handleFileInputChange, fileInputRef, cameraInputRef,
-    formatTimestamp, photoLocked,
+    formatTimestamp, photoLocked, workspaceId: workspace?.id,
   };
 
   const headerBar = (
@@ -1018,8 +1070,8 @@ export function TaskDetailPanel({ task, visibleFields, allFields, allLists, form
                   <TaskPanelBody {...bodyProps} showActivity={false} />
                 </div>
                 <div className="w-[380px] shrink-0 overflow-y-auto p-4">
-                  <ActivitySection editedTask={editedTask} setEditedTask={setEditedTask}
-                    onUpdate={onUpdate} user={user} formatTimestamp={formatTimestamp} />
+                  <ActivitySection editedTask={editedTask} workspaceId={workspace?.id}
+                    user={user} formatTimestamp={formatTimestamp} />
                 </div>
               </div>
             )}
@@ -1043,8 +1095,8 @@ export function TaskDetailPanel({ task, visibleFields, allFields, allLists, form
             <TaskPanelBody {...bodyProps} showActivity={false} />
           </div>
           <div className="w-[300px] shrink-0 overflow-y-auto p-4">
-            <ActivitySection editedTask={editedTask} setEditedTask={setEditedTask}
-              onUpdate={onUpdate} user={user} formatTimestamp={formatTimestamp} />
+            <ActivitySection editedTask={editedTask} workspaceId={workspace?.id}
+              user={user} formatTimestamp={formatTimestamp} />
           </div>
         </div>
       )}

@@ -45,14 +45,14 @@ ALTER TABLE whatsapp_messages      ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "wa_convs_workspace_access" ON whatsapp_conversations
   FOR ALL USING (
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid()::text
+      SELECT workspace_id FROM workspace_members WHERE uid = auth.uid()::text
     )
   );
 
 CREATE POLICY "wa_msgs_workspace_access" ON whatsapp_messages
   FOR ALL USING (
     workspace_id IN (
-      SELECT workspace_id FROM workspace_members WHERE user_id = auth.uid()::text
+      SELECT workspace_id FROM workspace_members WHERE uid = auth.uid()::text
     )
   );
 

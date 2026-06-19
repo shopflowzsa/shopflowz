@@ -446,11 +446,9 @@ export default function BarcodePrinting() {
         </html>
       `);
       printWindow.document.close();
-      
-      setTimeout(() => {
+      printWindow.onload = () => {
         printWindow.print();
-        printWindow.close();
-      }, 250);
+      };
     }
   };
 

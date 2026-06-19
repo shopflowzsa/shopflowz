@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter
 } from "@/components/ui/dialog";
@@ -16,7 +17,9 @@ import { Separator } from "@/components/ui/separator";
 import { DollarSign, Plus, Send, Printer, MessageSquare, Download, Eye } from "lucide-react";
 import { Invoice, Payment } from "@/types/crm";
 import { formatCurrency } from "@/lib/accountsService";
-import { previewInvoice, printInvoice, downloadInvoice, sendInvoiceViaWhatsApp } from "@/lib/pdfService";
+import { previewInvoice, printInvoice, downloadInvoice, generateInvoicePDFBlob } from "@/lib/pdfService";
+import { loadSalesSettings } from "@/lib/salesSettingsService";
+import { sendPDFViaWhatsApp } from "@/lib/whatsappPdfService";
 import { toast } from "sonner";
 
 interface InvoiceEditorProps {
@@ -28,6 +31,7 @@ interface InvoiceEditorProps {
 }
 
 export function InvoiceEditor({ invoice, open, onClose, onSave, onRecordPayment }: InvoiceEditorProps) {
+  const { workspaceId, user } = useAuth();
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash");
@@ -79,10 +83,32 @@ export function InvoiceEditor({ invoice, open, onClose, onSave, onRecordPayment 
   };
 
   const handleSendWhatsApp = async () => {
+    if (!invoice || !workspaceId) return;
+    const phone = invoice.customerPhone?.trim();
+    if (!phone) {
+      toast({ title: "No phone number", description: "This invoice has no customer phone number.", variant: "destructive" });
+      return;
+    }
     setSendingWhatsApp(true);
     try {
-      await sendInvoiceViaWhatsApp(invoice, undefined);
-      toast({ title: "PDF Downloaded", description: "Invoice PDF saved — attach it in WhatsApp" });
+      const salesSettings = await loadSalesSettings(workspaceId);
+      const blob  = await generateInvoicePDFBlob(invoice, salesSettings);
+      const fname = `Invoice-${invoice.invoiceNumber}.pdf`;
+      const result = await sendPDFViaWhatsApp({
+        blob, filename: fname,
+        phone, contactName: invoice.customerName || phone,
+        workspaceId, sentByName: user?.email ?? "Staff",
+      });
+      if (result.success) {
+        toast({
+          title: result.queued ? "PDF Queued ✓" : "PDF Sent via WhatsApp ✓",
+          description: result.queued
+            ? "24hr window expired — re-opener sent. PDF delivers when client replies."
+            : `${fname} sent to ${phone}. Check WhatsApp Messenger to continue the chat.`,
+        });
+      } else {
+        toast({ title: "WhatsApp Failed", description: result.error, variant: "destructive" });
+      }
     } catch (e: any) {
       toast({ title: "WhatsApp Failed", description: e.message || "Failed", variant: "destructive" });
     } finally {

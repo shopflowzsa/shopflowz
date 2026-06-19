@@ -192,8 +192,24 @@ export function StatementPage({ onClose }: StatementPageProps) {
   const selectedRows = useMemo(() => {
     if (selectedCustomerId === "all") return [];
     const rows = statementByCustomer.get(selectedCustomerId) || [];
-    return rows.filter(r => r.date >= dateFrom && r.date <= dateTo);
-  }, [selectedCustomerId, statementByCustomer, dateFrom, dateTo]);
+    const dateFiltered = rows.filter(r => r.date >= dateFrom && r.date <= dateTo);
+
+    if (statementType === "outstanding") {
+      // Only keep invoice rows where the invoice still has a balance due, plus their payment rows
+      const outstandingInvNums = new Set(
+        invoices
+          .filter(i => i.customerId === selectedCustomerId && i.balanceDue > 0)
+          .map(i => i.invoiceNumber)
+      );
+      return dateFiltered.filter(r =>
+        r.type === "invoice"
+          ? outstandingInvNums.has(r.reference)
+          : outstandingInvNums.has(r.reference.replace(/^PMT-/, ""))
+      );
+    }
+
+    return dateFiltered;
+  }, [selectedCustomerId, statementByCustomer, dateFrom, dateTo, statementType, invoices]);
 
   const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 

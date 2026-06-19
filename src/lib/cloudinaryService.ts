@@ -121,6 +121,44 @@ export async function deleteImageFromCloudinary(imageUrl: string): Promise<void>
 }
 
 /**
+ * Upload any file (PDF, Excel, Word, image, etc.) to Cloudinary.
+ * Images are compressed first; other file types are uploaded raw.
+ * Returns the secure CDN URL.
+ */
+export async function uploadFileToCloudinary(
+  file: File,
+  folder: string = 'datasheets'
+): Promise<string> {
+  let fileToUpload: File = file;
+
+  // Compress images before upload to save bandwidth
+  if (file.type.startsWith('image/')) {
+    fileToUpload = await compressFileForUpload(file);
+  }
+
+  const formData = new FormData();
+  formData.append('file', fileToUpload);
+  formData.append('upload_preset', CLOUDINARY_UPLOAD_PRESET);
+  formData.append('folder', folder);
+
+  // Use raw upload endpoint for non-image files so Cloudinary doesn't reject them
+  const resourceType = file.type.startsWith('image/') ? 'image' : 'raw';
+
+  const response = await fetch(
+    `https://api.cloudinary.com/v1_1/${CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`,
+    { method: 'POST', body: formData }
+  );
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err?.error?.message || 'Failed to upload file to Cloudinary');
+  }
+
+  const data = await response.json();
+  return data.secure_url;
+}
+
+/**
  * Get optimized image URL with transformations
  * @param url - Original Cloudinary URL
  * @param width - Target width
@@ -152,4 +190,23 @@ export function getOptimizedImageUrl(
  */
 export function getThumbnailUrl(url: string): string {
   return getOptimizedImageUrl(url, 150, 150);
+}
+
+/**
+ * Returns a URL that forces a file download.
+ * - Cloudinary URLs: injects fl_attachment flag
+ * - Supabase Storage URLs: appends ?download= query param
+ * - Other URLs: returned as-is
+ */
+export function getFileDownloadUrl(url: string, filename?: string): string {
+  if (!url) return url;
+  if (url.includes('cloudinary.com')) {
+    const parts = url.split('/upload/');
+    if (parts.length !== 2) return url;
+    return `${parts[0]}/upload/fl_attachment/${parts[1]}`;
+  }
+  if (url.includes('supabase.co/storage')) {
+    return `${url}?download=${filename ? encodeURIComponent(filename) : ''}`;
+  }
+  return url;
 }

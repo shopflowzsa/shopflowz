@@ -22,11 +22,12 @@ const TRIGGER_LABELS: Record<AutomationTriggerType, string> = {
   start_date_overdue:  "Start date is overdue by…",
 };
 const ACTION_LABELS: Record<AutomationActionType, string> = {
-  set_status:      "Set status to…",
-  assign_members:  "Assign to members",
-  set_priority:    "Set priority to…",
-  flag_task:       "Flag task",
-  move_to_list:    "Move to list…",
+  set_status:        "Set status to…",
+  assign_members:    "Assign to members",
+  unassign_members:  "Unassign members",
+  set_priority:      "Set priority to…",
+  flag_task:         "Flag task",
+  move_to_list:      "Move to list…",
 };
 
 function triggerSummary(a: Automation, statuses: StatusConfig[], listName: string, allLists: List[]) {
@@ -65,6 +66,15 @@ function actionSummary(a: Automation, statuses: StatusConfig[], members: Workspa
         return m?.displayName || m?.email || uid;
       });
       return names.length ? `Assign: ${names.join(", ")}` : "Assign (no one set)";
+    }
+    case "unassign_members": {
+      const uids = a.action.assigneeUids ?? [];
+      if (!uids.length) return "Unassign: everyone";
+      const names = uids.map(uid => {
+        const m = members.find(m => m.uid === uid);
+        return m?.displayName || m?.email || uid;
+      });
+      return `Unassign: ${names.join(", ")}`;
     }
     case "set_priority": {
       const p = PRIORITIES.find(p => p.value === a.action.priority);
@@ -381,6 +391,27 @@ export function AutomationsDialog({ list, allLists, members, onSave, onClose, on
                         className={cn(
                           "flex items-center gap-1 text-xs px-2 py-1 rounded-full border transition-colors",
                           checked ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border text-muted-foreground hover:border-primary",
+                        )}
+                      >
+                        {m.displayName || m.email}
+                        {checked && <X className="h-3 w-3 opacity-70" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {action.type === "unassign_members" && (
+                <div className="flex flex-wrap gap-1.5 p-2 border border-border rounded-md bg-background">
+                  <p className="text-xs text-muted-foreground w-full mb-1">Select specific members to unassign, or leave empty to unassign everyone.</p>
+                  {members.map(m => {
+                    const checked = action.assigneeUids.includes(m.uid);
+                    return (
+                      <button
+                        key={m.uid}
+                        onClick={() => toggleAssignee(m.uid)}
+                        className={cn(
+                          "flex items-center gap-1 text-xs px-2 py-1 rounded-full border transition-colors",
+                          checked ? "bg-destructive text-destructive-foreground border-destructive" : "bg-background border-border text-muted-foreground hover:border-destructive",
                         )}
                       >
                         {m.displayName || m.email}

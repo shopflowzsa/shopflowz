@@ -308,46 +308,80 @@ export async function getPublicProducts(
   }
 
   // Transform inventory items → PublicProduct shape
-  const publicProducts: PublicProduct[] = items.map(item => ({
-    id: item.id,
-    name: item.name as string,
-    description: (item.description as string) || '',
-    shortDescription: (item.description as string) || '',
-    images: item.imageUrl ? [{ id: '1', url: toCleanProductImageUrl(item.imageUrl as string) ?? (item.imageUrl as string), alt: item.name as string, sortOrder: 0, isDefault: true }] : [],
-    variants: (() => {
-      const regularPrice = Number(item.price || item.unitPrice || 0);
-      const rawSale = typeof item.salePrice === 'number' ? item.salePrice : 0;
-      const saleActive = rawSale > 0 && rawSale < regularPrice;
-      return [{
-        id: `${item.id}_v1`,
-        sku: (item.sku as string) || item.id,
-        name: 'Standard',
-        // price = what the customer actually pays (sale price if active, otherwise regular)
-        price: saleActive ? rawSale : regularPrice,
-        // compareAtPrice = struck-through "was" price when on sale
-        compareAtPrice: saleActive ? regularPrice : undefined,
-        salePrice: saleActive ? rawSale : undefined,
-        inStock: (() => {
-          const qty = (item.quantity !== undefined && item.quantity !== null)
-            ? item.quantity
-            : (item.currentStock !== undefined && item.currentStock !== null)
-              ? item.currentStock
-              : undefined;
-          // If no stock field is set, assume in-stock (store isn't tracking inventory)
-          return qty === undefined || Number(qty) > 0;
-        })(),
-        attributes: [],
-        packSize: (item as any).packSize,
-        packPrice: (item as any).packPrice,
-      }];
-    })(),
-    brand: (item.supplier as string) || undefined,
-    category: (item.category as string) || '',
-    tags: [],
-    quantityInStock: (item.quantity as number | undefined) ?? (item.currentStock as number | undefined) ?? 0,
-    averageRating: undefined,
-    reviewCount: undefined,
-  }));
+  const publicProducts: PublicProduct[] = items.map(item => {
+    const regularPrice = Number(item.price || item.unitPrice || 0);
+    const rawSale = typeof item.salePrice === 'number' ? item.salePrice : 0;
+    const saleActive = rawSale > 0 && rawSale < regularPrice;
+
+    // ── Images ─────────────────────────────────────────────────────────────
+    const mainImg = item.imageUrl
+      ? [{ id: '1', url: toCleanProductImageUrl(item.imageUrl as string) ?? (item.imageUrl as string), alt: item.name as string, sortOrder: 0, isDefault: true }]
+      : [];
+    const extraImgs = ((item.extraImages as string[]) || []).map((url, i) => ({
+      id: `extra_${i + 2}`,
+      url: toCleanProductImageUrl(url) ?? url,
+      alt: `${item.name as string} — view ${i + 2}`,
+      sortOrder: i + 1,
+      isDefault: false,
+    }));
+    const images = [...mainImg, ...extraImgs];
+
+    // ── Variants ────────────────────────────────────────────────────────────
+    const namedVariants = item.productVariants as Array<{ id: string; name: string; price?: number; stock: number; sku?: string; }> | undefined;
+    const hasNamedVariants = Array.isArray(namedVariants) && namedVariants.length > 0;
+
+    const variants = hasNamedVariants
+      ? namedVariants!.map(v => ({
+          id: v.id || `v_${v.name}`,
+          sku: v.sku || (item.sku as string) || item.id,
+          name: v.name,
+          price: Number(v.price ?? regularPrice),
+          compareAtPrice: undefined,
+          salePrice: undefined,
+          inStock: Number(v.stock ?? 0) > 0,
+          attributes: [],
+          packSize: undefined,
+          packPrice: undefined,
+        }))
+      : [{
+          id: `${item.id}_v1`,
+          sku: (item.sku as string) || item.id,
+          name: 'Standard',
+          price: saleActive ? rawSale : regularPrice,
+          compareAtPrice: saleActive ? regularPrice : undefined,
+          salePrice: saleActive ? rawSale : undefined,
+          inStock: (() => {
+            const qty = (item.quantity !== undefined && item.quantity !== null)
+              ? item.quantity
+              : (item.currentStock !== undefined && item.currentStock !== null)
+                ? item.currentStock
+                : undefined;
+            return qty === undefined || Number(qty) > 0;
+          })(),
+          attributes: [],
+          packSize: (item as any).packSize,
+          packPrice: (item as any).packPrice,
+        }];
+
+    const quantityInStock = hasNamedVariants
+      ? namedVariants!.reduce((sum, v) => sum + Number(v.stock ?? 0), 0)
+      : ((item.quantity as number | undefined) ?? (item.currentStock as number | undefined) ?? 0);
+
+    return {
+      id: item.id,
+      name: item.name as string,
+      description: (item.description as string) || '',
+      shortDescription: (item.description as string) || '',
+      images,
+      variants,
+      brand: (item.supplier as string) || undefined,
+      category: (item.category as string) || '',
+      tags: [],
+      quantityInStock,
+      averageRating: undefined,
+      reviewCount: undefined,
+    };
+  });
 
   return {
     products: publicProducts,

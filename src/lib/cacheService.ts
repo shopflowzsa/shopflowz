@@ -1,7 +1,7 @@
 import type { WorkspaceState } from "@/types/crm";
 
 const DB_NAME = "shopflowz_cache";
-const DB_VERSION = 2;
+const DB_VERSION = 3; // bumped to evict stale task-position caches from all browsers
 const STORE = "workspace";
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -16,11 +16,20 @@ interface CacheEntry {
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: "id" });
+      // Drop and recreate the store on any version upgrade so stale task
+      // positions cached by older versions are wiped from every browser.
+      if (db.objectStoreNames.contains(STORE)) {
+        db.deleteObjectStore(STORE);
       }
+      db.createObjectStore(STORE, { keyPath: "id" });
+      // Also clear localStorage fallback entries
+      try {
+        Object.keys(localStorage).forEach(k => {
+          if (k.startsWith('ws_cache_v1_')) localStorage.removeItem(k);
+        });
+      } catch { /* ignore */ }
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -60,15 +69,22 @@ export async function getCachedWorkspace(workspaceId: string): Promise<Workspace
 
 /**
  * Saves the WorkspaceState to IndexedDB. Fire-and-forget — won't block the UI.
+ * Tasks are intentionally NOT cached — they live in the tasks table and must
+ * always be loaded fresh so every user sees the current positions. Caching
+ * tasks would mean one user's stale IndexedDB overwrites another user's
+ * live moves even after a refresh.
  */
 export function setCachedWorkspace(workspaceId: string, state: WorkspaceState): void {
+  // Strip tasks before caching — tasks table is the source of truth
+  const { tasks: _tasks, deletedTaskIds: _del, ...structuralState } = state as any;
+  const stateToCache = { ...structuralState, tasks: [], deletedTaskIds: [] } as WorkspaceState;
   openDB().then(db => {
     const tx = db.transaction(STORE, "readwrite");
-    tx.objectStore(STORE).put({ id: workspaceId, ts: Date.now(), state } as CacheEntry);
+    tx.objectStore(STORE).put({ id: workspaceId, ts: Date.now(), state: stateToCache } as CacheEntry);
   }).catch(() => {
     // Absolute last-resort: localStorage (may fail on large workspaces)
     try {
-      localStorage.setItem(`ws_cache_v1_${workspaceId}`, JSON.stringify({ v: 1, ts: Date.now(), state }));
+      localStorage.setItem(`ws_cache_v1_${workspaceId}`, JSON.stringify({ v: 1, ts: Date.now(), state: stateToCache }));
     } catch { /* ignore quota errors */ }
   });
 }
@@ -93,5 +109,8 @@ export function getMemCachedWorkspace(workspaceId: string): WorkspaceState | nul
 }
 
 export function setMemCachedWorkspace(workspaceId: string, state: WorkspaceState): void {
-  memCache.set(workspaceId, state);
+  // Strip tasks — only cache structural state so task positions are always
+  // loaded from the tasks table (never served stale from memory).
+  const { tasks: _tasks, deletedTaskIds: _del, ...structural } = state as any;
+  memCache.set(workspaceId, { ...structural, tasks: [], deletedTaskIds: [] } as WorkspaceState);
 }

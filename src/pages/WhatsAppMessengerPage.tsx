@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ArrowLeft, Search, Send, MessageCircle, Check, CheckCheck,
-  Clock, AlertTriangle, Phone, X,
+  Clock, AlertTriangle, Phone, X, Settings, Volume2, Bell, VolumeX,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,8 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
 import { loadWhatsAppSettings } from "@/lib/whatsappService";
-import { format, isToday, isYesterday, formatDistanceToNow, isPast, addHours } from "date-fns";
+import { format, isToday, isYesterday, formatDistanceToNow, isPast } from "date-fns";
 import { cn } from "@/lib/utils";
+import {
+  getWaNotifSettings, saveWaNotifSettings, playWaSound,
+  WA_SOUNDS, WA_REMINDER_OPTIONS, type WaNotifSettings,
+} from "@/lib/waNotificationService";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,6 +27,9 @@ interface WaConversation {
   last_message_at: string;
   unread_count: number;
   window_expires_at: string | null;
+  last_replied_by_name: string | null;
+  pending_message: string | null;
+  pending_message_by: string | null;
   created_at: string;
 }
 
@@ -33,6 +40,7 @@ interface WaMessage {
   direction: "inbound" | "outbound";
   message_type: string;
   content: string | null;
+  media_url: string | null;
   status: string;
   sent_by_name: string | null;
   created_at: string;
@@ -97,9 +105,11 @@ function StatusTick({ status }: { status: string }) {
 
 interface Props {
   onClose: () => void;
+  onUnreadCountChange?: (count: number) => void;
+  onSettingsChange?: (s: WaNotifSettings) => void;
 }
 
-export function WhatsAppMessengerPage({ onClose }: Props) {
+export function WhatsAppMessengerPage({ onClose, onUnreadCountChange, onSettingsChange }: Props) {
   const { workspaceId, user, members } = useAuth();
 
   const [conversations, setConversations] = useState<WaConversation[]>([]);
@@ -110,6 +120,8 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
   const [loadingConvs, setLoadingConvs]   = useState(true);
   const [sending, setSending]             = useState(false);
   const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [showSettings, setShowSettings]   = useState(false);
+  const [notifSettings, setNotifSettings] = useState<WaNotifSettings>(getWaNotifSettings);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef       = useRef<HTMLTextAreaElement>(null);
@@ -119,7 +131,7 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
 
   const windowExpired = selectedConv?.window_expires_at
     ? isPast(new Date(selectedConv.window_expires_at))
-    : true; // if no window on record, require template
+    : true;
 
   const windowExpiresIn = selectedConv?.window_expires_at && !windowExpired
     ? formatDistanceToNow(new Date(selectedConv.window_expires_at), { addSuffix: true })
@@ -189,10 +201,16 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
         filter: `workspace_id=eq.${workspaceId}`,
       }, payload => {
         const msg = payload.new as WaMessage;
-        // Add to current chat if it belongs here
         setSelectedId(prev => {
           if (msg.conversation_id === prev) {
-            setMessages(m => [...m, msg]);
+            setMessages(m => {
+              // Replace optimistic (tmp_) entry if wamid matches, otherwise append
+              if (msg.wamid && m.some(x => x.wamid === msg.wamid)) {
+                return m.map(x => x.wamid === msg.wamid ? msg : x);
+              }
+              if (m.some(x => x.id === msg.id)) return m;
+              return [...m, msg];
+            });
           }
           return prev;
         });
@@ -235,63 +253,104 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
         return;
       }
 
+      // ── Window expired: send re-opener template first, queue the message ──
+      if (windowExpired && selectedConv.window_expires_at) {
+        const reopenerTemplate = settings.reopenerTemplate?.trim();
+        if (!reopenerTemplate) {
+          setSettingsError("24-hour window expired. Set a Re-opener Template in Settings → WhatsApp to auto-queue messages.");
+          setSending(false);
+          return;
+        }
+
+        // Send the re-opener template
+        const contactName = selectedConv.contact_name ?? selectedConv.contact_phone;
+        const tplBody: any = {
+          messaging_product: "whatsapp",
+          to: selectedConv.contact_phone,
+          type: "template",
+          template: {
+            name: reopenerTemplate,
+            language: { code: settings.languageCode ?? "en_US" },
+            components: [{
+              type: "body",
+              parameters: [{ type: "text", text: contactName }],
+            }],
+          },
+        };
+
+        const tplRes = await fetch(
+          `https://graph.facebook.com/v19.0/${settings.phoneNumberId}/messages`,
+          { method: "POST", headers: { Authorization: `Bearer ${settings.accessToken}`, "Content-Type": "application/json" }, body: JSON.stringify(tplBody) },
+        );
+        const tplData = await tplRes.json();
+        if (!tplRes.ok) throw new Error(tplData?.error?.message ?? `Re-opener failed: ${tplRes.status}`);
+
+        const tplWamid: string | undefined = tplData.messages?.[0]?.id;
+
+        // Save re-opener as a sent message
+        await supabaseServiceRole.from("whatsapp_messages").insert({
+          workspace_id: workspaceId, conversation_id: selectedConv.id,
+          wamid: tplWamid ?? null, direction: "outbound", message_type: "template",
+          content: `[Re-opener: ${reopenerTemplate}]`, status: "sent", sent_by_name: displayName,
+        });
+
+        // Queue the actual message
+        await supabaseServiceRole.from("whatsapp_conversations").update({
+          pending_message:    text,
+          pending_message_by: displayName,
+          last_message:       `[Re-opener sent — awaiting reply]`,
+          last_message_at:    new Date().toISOString(),
+          last_replied_by_name: displayName,
+        }).eq("id", selectedConv.id);
+
+        setConversations(prev => prev.map(c =>
+          c.id === selectedConv.id
+            ? { ...c, pending_message: text, pending_message_by: displayName, last_replied_by_name: displayName }
+            : c
+        ));
+        loadMessages(selectedConv.id);
+        loadConversations();
+        setSending(false);
+        setTimeout(() => inputRef.current?.focus(), 50);
+        return;
+      }
+
+      // ── Normal send ────────────────────────────────────────────────────────
       const res = await fetch(
         `https://graph.facebook.com/v19.0/${settings.phoneNumberId}/messages`,
         {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${settings.accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            messaging_product: "whatsapp",
-            to: selectedConv.contact_phone,
-            type: "text",
-            text: { body: text },
-          }),
+          headers: { Authorization: `Bearer ${settings.accessToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ messaging_product: "whatsapp", to: selectedConv.contact_phone, type: "text", text: { body: text } }),
         }
       );
 
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error?.message ?? `Meta API error ${res.status}`);
-      }
+      if (!res.ok) throw new Error(data?.error?.message ?? `Meta API error ${res.status}`);
 
       const wamid: string | undefined = data.messages?.[0]?.id;
 
-      // Optimistically add message to UI
       const optimistic: WaMessage = {
-        id: `tmp_${Date.now()}`,
-        conversation_id: selectedConv.id,
-        wamid: wamid ?? null,
-        direction: "outbound",
-        message_type: "text",
-        content: text,
-        status: "sent",
-        sent_by_name: displayName,
-        created_at: new Date().toISOString(),
+        id: `tmp_${Date.now()}`, conversation_id: selectedConv.id,
+        wamid: wamid ?? null, direction: "outbound", message_type: "text",
+        content: text, status: "sent", sent_by_name: displayName, created_at: new Date().toISOString(),
+        media_url: null,
       };
       setMessages(prev => [...prev, optimistic]);
 
-      // Persist to database
       await supabaseServiceRole.from("whatsapp_messages").insert({
-        workspace_id:    workspaceId,
-        conversation_id: selectedConv.id,
-        wamid:           wamid ?? null,
-        direction:       "outbound",
-        message_type:    "text",
-        content:         text,
-        status:          "sent",
-        sent_by_id:      user?.uid,
-        sent_by_name:    displayName,
+        workspace_id: workspaceId, conversation_id: selectedConv.id,
+        wamid: wamid ?? null, direction: "outbound", message_type: "text",
+        content: text, status: "sent", sent_by_id: user?.uid, sent_by_name: displayName,
       });
 
-      // Update conversation last message
       await supabaseServiceRole.from("whatsapp_conversations").update({
-        last_message:    text,
-        last_message_at: new Date().toISOString(),
+        last_message: text, last_message_at: new Date().toISOString(), last_replied_by_name: displayName,
       }).eq("id", selectedConv.id);
 
+      setConversations(prev => prev.map(c =>
+        c.id === selectedConv.id ? { ...c, last_message: text, last_replied_by_name: displayName } : c
+      ));
       loadConversations();
     } catch (err: any) {
       setSettingsError(err?.message ?? "Failed to send message. Check your WhatsApp settings.");
@@ -299,6 +358,25 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
       setSending(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
+  }
+
+  async function cancelPendingMessage() {
+    if (!selectedConv) return;
+    await supabaseServiceRole.from("whatsapp_conversations").update({
+      pending_message: null, pending_message_by: null,
+    }).eq("id", selectedConv.id);
+    setConversations(prev => prev.map(c =>
+      c.id === selectedConv.id ? { ...c, pending_message: null, pending_message_by: null } : c
+    ));
+  }
+
+  // ── Notification settings ──────────────────────────────────────────────────
+
+  function updateNotifSettings(patch: Partial<WaNotifSettings>) {
+    const next = { ...notifSettings, ...patch };
+    setNotifSettings(next);
+    saveWaNotifSettings(next);
+    onSettingsChange?.(next);
   }
 
   // ── Filter conversations ───────────────────────────────────────────────────
@@ -312,10 +390,14 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
 
   const totalUnread = conversations.reduce((n, c) => n + (c.unread_count ?? 0), 0);
 
+  useEffect(() => {
+    onUnreadCountChange?.(totalUnread);
+  }, [totalUnread]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="fixed inset-0 z-40 flex overflow-hidden" style={{ background: "var(--background)" }}>
+    <div className="absolute inset-0 z-30 flex overflow-hidden bg-background">
 
       {/* ══ LEFT PANEL — Conversation list ══════════════════════════════════════ */}
       <div className={cn(
@@ -341,7 +423,89 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
               </Badge>
             )}
           </div>
+          {/* Notification settings button */}
+          <Button
+            variant="ghost" size="icon"
+            onClick={() => setShowSettings(s => !s)}
+            className={cn(
+              "shrink-0 text-muted-foreground hover:text-foreground",
+              showSettings && "bg-accent text-foreground"
+            )}
+            title="Notification settings"
+          >
+            <Settings className="h-4 w-4" />
+          </Button>
         </div>
+
+        {/* Notification settings panel */}
+        {showSettings && (
+          <div className="border-b border-border bg-background px-4 py-4 space-y-4 shrink-0">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Notification Settings</p>
+
+            {/* Sound selection */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                <Volume2 className="h-3.5 w-3.5 text-green-500" /> Message Sound
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {WA_SOUNDS.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => updateNotifSettings({ sound: s.id })}
+                    className={cn(
+                      "px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
+                      notifSettings.sound === s.id
+                        ? "bg-green-500 text-white border-green-500"
+                        : "border-border text-muted-foreground hover:border-green-500 hover:text-foreground"
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+              {notifSettings.sound !== "none" && (
+                <button
+                  onClick={() => playWaSound(notifSettings.sound)}
+                  className="text-xs text-green-500 hover:text-green-400 underline underline-offset-2"
+                >
+                  Test sound
+                </button>
+              )}
+            </div>
+
+            {/* Recurring reminder */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                <Bell className="h-3.5 w-3.5 text-green-500" /> Unanswered Message Reminder
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {WA_REMINDER_OPTIONS.map(o => (
+                  <button
+                    key={o.value}
+                    onClick={() => updateNotifSettings({ reminderMinutes: o.value })}
+                    className={cn(
+                      "px-2.5 py-1 rounded-full text-xs font-medium border transition-colors",
+                      notifSettings.reminderMinutes === o.value
+                        ? "bg-green-500 text-white border-green-500"
+                        : "border-border text-muted-foreground hover:border-green-500 hover:text-foreground"
+                    )}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Plays sound again if there are unread messages after the set time
+              </p>
+            </div>
+
+            {notifSettings.sound === "none" && notifSettings.reminderMinutes === 0 && (
+              <div className="flex items-center gap-1.5 text-xs text-amber-400">
+                <VolumeX className="h-3.5 w-3.5" /> All notifications are off
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Search */}
         <div className="px-3 py-2 border-b border-border/50">
@@ -434,6 +598,17 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
                         </span>
                       )}
                     </div>
+                    {/* Who last replied */}
+                    {conv.last_replied_by_name && conv.unread_count === 0 && (
+                      <p className="text-[11px] text-green-500/80 truncate mt-0.5">
+                        ✓ Replied by {conv.last_replied_by_name}
+                      </p>
+                    )}
+                    {!conv.last_replied_by_name && conv.unread_count > 0 && (
+                      <p className="text-[11px] text-amber-400 truncate mt-0.5">
+                        ⚠ Awaiting reply
+                      </p>
+                    )}
                   </div>
                 </button>
               );
@@ -444,7 +619,7 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
 
       {/* ══ RIGHT PANEL — Chat view ══════════════════════════════════════════════ */}
       <div className={cn(
-        "flex-1 flex flex-col min-w-0",
+        "flex-1 flex flex-col min-w-0 bg-background",
         !selectedId && "hidden md:flex",
       )}>
 
@@ -468,14 +643,12 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
           <>
             {/* ── Chat header ──────────────────────────────────────────────────── */}
             <div className="flex items-center gap-3 px-4 py-3 bg-card border-b border-border shrink-0">
-              {/* Back button (mobile) */}
               <Button variant="ghost" size="icon"
                 className="md:hidden text-muted-foreground shrink-0"
                 onClick={() => setSelectedId(null)}>
                 <ArrowLeft className="h-5 w-5" />
               </Button>
 
-              {/* Avatar */}
               <div
                 className="h-9 w-9 rounded-full flex items-center justify-center text-white font-semibold text-base shrink-0"
                 style={{ backgroundColor: avatarColor(selectedConv.contact_name ?? selectedConv.contact_phone) }}
@@ -483,19 +656,26 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
                 {(selectedConv.contact_name ?? selectedConv.contact_phone).charAt(0).toUpperCase()}
               </div>
 
-              {/* Name + number */}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-foreground leading-tight">
                   {selectedConv.contact_name ?? selectedConv.contact_phone}
                 </p>
-                {selectedConv.contact_name && (
-                  <p className="text-xs text-muted-foreground leading-tight">
-                    {selectedConv.contact_phone}
-                  </p>
-                )}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {selectedConv.contact_name && (
+                    <p className="text-xs text-muted-foreground leading-tight">
+                      {selectedConv.contact_phone}
+                    </p>
+                  )}
+                  {selectedConv.last_replied_by_name ? (
+                    <p className="text-[11px] text-green-500/80 leading-tight">
+                      · Last replied by <strong>{selectedConv.last_replied_by_name}</strong>
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-amber-400 leading-tight">· No reply yet</p>
+                  )}
+                </div>
               </div>
 
-              {/* Window status */}
               {windowExpiresIn && (
                 <div className={cn(
                   "flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full shrink-0",
@@ -515,7 +695,7 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
               )}
             </div>
 
-            {/* ── Error / settings banner ───────────────────────────────────────── */}
+            {/* ── Error banner ─────────────────────────────────────────────────── */}
             {settingsError && (
               <div className="flex items-start gap-2 px-4 py-2.5 bg-red-500/10 border-b border-red-500/20 text-red-400 text-xs shrink-0">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
@@ -549,7 +729,6 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
               ) : (
                 groupMessages(messages).map(group => (
                   <div key={group.label}>
-                    {/* Date divider */}
                     <div className="flex items-center justify-center my-4">
                       <span className="bg-card border border-border text-xs text-muted-foreground px-3 py-1 rounded-full">
                         {group.label}
@@ -570,28 +749,58 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
                           )}
                         >
                           <div className={cn(
-                            "max-w-[72%] rounded-2xl px-3 py-2 shadow-sm relative",
+                            "max-w-[72%] rounded-2xl px-3 py-2 shadow-sm",
                             isOut
                               ? "bg-[#005c4b] text-white rounded-tr-sm"
                               : "bg-card border border-border/60 text-foreground rounded-tl-sm"
                           )}>
-                            {/* Staff name on outbound (multi-staff context) */}
                             {isOut && msg.sent_by_name && (
-                              <p className="text-[10px] font-medium text-green-200/80 mb-0.5">
+                              <p className="text-[10px] font-semibold text-green-200/90 mb-0.5">
                                 {msg.sent_by_name}
                               </p>
                             )}
 
-                            {/* Message content */}
-                            <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">
-                              {msg.content ?? `[${msg.message_type}]`}
-                            </p>
+                            {/* Media */}
+                            {msg.media_url && msg.message_type === "image" && (
+                              <img
+                                src={msg.media_url}
+                                alt="Image"
+                                className="max-w-full rounded-lg max-h-64 object-contain mb-1 cursor-pointer"
+                                onClick={() => window.open(msg.media_url!, "_blank")}
+                              />
+                            )}
+                            {msg.media_url && msg.message_type === "video" && (
+                              <video src={msg.media_url} controls className="max-w-full rounded-lg max-h-48 mb-1" />
+                            )}
+                            {msg.media_url && msg.message_type === "audio" && (
+                              <audio src={msg.media_url} controls className="w-full mb-1" />
+                            )}
+                            {msg.media_url && msg.message_type === "document" && (
+                              <a href={msg.media_url} target="_blank" rel="noreferrer"
+                                className="flex items-center gap-2 text-xs underline mb-1 opacity-80">
+                                📎 Download document
+                              </a>
+                            )}
+                            {/* Text / caption */}
+                            {msg.content ? (
+                              <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
+                            ) : !msg.media_url ? (
+                              <p className="text-sm italic opacity-60">
+                                {msg.message_type === "unsupported"
+                                  ? "🔒 View-once or unsupported message"
+                                  : msg.message_type === "sticker"
+                                  ? "🪄 Sticker"
+                                  : msg.message_type === "location"
+                                  ? "📍 Location (open WhatsApp to view)"
+                                  : msg.message_type === "contacts"
+                                  ? "👤 Contact card"
+                                  : msg.message_type === "reaction"
+                                  ? "👍 Reaction"
+                                  : `[${msg.message_type}]`}
+                              </p>
+                            ) : null}
 
-                            {/* Timestamp + status */}
-                            <div className={cn(
-                              "flex items-center gap-1 mt-1",
-                              isOut ? "justify-end" : "justify-end"
-                            )}>
+                            <div className="flex items-center gap-1 mt-1 justify-end">
                               <span className={cn(
                                 "text-[10px]",
                                 isOut ? "text-white/50" : "text-muted-foreground/60"
@@ -611,50 +820,60 @@ export function WhatsAppMessengerPage({ onClose }: Props) {
             </div>
 
             {/* ── Input area ───────────────────────────────────────────────────── */}
-            <div className="shrink-0 border-t border-border bg-card px-4 py-3">
-              {windowExpired && selectedConv.window_expires_at ? (
-                <div className="flex items-center justify-center py-2 text-sm text-muted-foreground gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-400" />
-                  24-hour window expired — go to{" "}
-                  <strong className="text-foreground">Settings → WhatsApp</strong>{" "}
-                  to send a template
-                </div>
-              ) : (
-                <div className="flex items-end gap-2">
-                  <textarea
-                    ref={inputRef}
-                    value={input}
-                    rows={1}
-                    placeholder="Type a message"
-                    onChange={e => {
-                      setInput(e.target.value);
-                      e.target.style.height = "auto";
-                      e.target.style.height = Math.min(e.target.scrollHeight, 128) + "px";
-                    }}
-                    onKeyDown={e => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage();
-                      }
-                    }}
-                    className={cn(
-                      "flex-1 resize-none rounded-2xl bg-background border border-border",
-                      "px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground",
-                      "focus:outline-none focus:ring-1 focus:ring-green-500",
-                      "min-h-[40px] max-h-32 overflow-y-auto"
-                    )}
-                  />
-                  <Button
-                    onClick={sendMessage}
-                    disabled={!input.trim() || sending}
-                    size="icon"
-                    className="h-10 w-10 rounded-full bg-green-500 hover:bg-green-600 text-white shrink-0 disabled:opacity-40"
-                  >
-                    <Send className="h-4 w-4" />
-                  </Button>
+            <div className="shrink-0 border-t border-border bg-card px-4 py-3 space-y-2">
+              {/* Pending message notice */}
+              {selectedConv.pending_message && (
+                <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2">
+                  <Clock className="h-3.5 w-3.5 text-amber-400 mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-amber-400">Message queued — waiting for reply to re-opener</p>
+                    <p className="text-xs text-muted-foreground truncate mt-0.5">"{selectedConv.pending_message}"</p>
+                  </div>
+                  <button onClick={cancelPendingMessage} className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5" title="Cancel queued message">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               )}
-              <p className="text-[10px] text-muted-foreground/50 mt-1.5 text-center">
+              {/* Expired window hint (only if no pending message already) */}
+              {windowExpired && selectedConv.window_expires_at && !selectedConv.pending_message && (
+                <div className="flex items-center gap-2 text-xs text-amber-400">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                  Window expired — a re-opener template will be sent automatically before your message.
+                </div>
+              )}
+              <div className="flex items-end gap-2">
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  rows={1}
+                  placeholder={selectedConv.pending_message ? "Message queued — waiting for client reply…" : "Type a message"}
+                  disabled={!!selectedConv.pending_message}
+                  onChange={e => {
+                    setInput(e.target.value);
+                    e.target.style.height = "auto";
+                    e.target.style.height = Math.min(e.target.scrollHeight, 128) + "px";
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+                  }}
+                  className={cn(
+                    "flex-1 resize-none rounded-2xl bg-background border border-border",
+                    "px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground",
+                    "focus:outline-none focus:ring-1 focus:ring-green-500",
+                    "min-h-[40px] max-h-32 overflow-y-auto",
+                    selectedConv.pending_message && "opacity-50 cursor-not-allowed",
+                  )}
+                />
+                <Button
+                  onClick={sendMessage}
+                  disabled={!input.trim() || sending || !!selectedConv.pending_message}
+                  size="icon"
+                  className="h-10 w-10 rounded-full bg-green-500 hover:bg-green-600 text-white shrink-0 disabled:opacity-40"
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
+              <p className="text-[10px] text-muted-foreground/50 text-center">
                 Press Enter to send · Shift+Enter for new line
               </p>
             </div>

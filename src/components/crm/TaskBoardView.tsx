@@ -8,7 +8,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { Task, DEFAULT_STATUSES, PRIORITIES, TaskStatus, CustomFieldDefinition, StatusConfig } from "@/types/crm";
 import { WorkspaceMember } from "@/types/auth";
 import { cn } from "@/lib/utils";
-import { Plus, Calendar, Trash2, CheckSquare, MoreHorizontal, CheckCheck, X, Edit, Copy, MoveRight, Archive, ArchiveRestore, ChevronDown, Settings2, UserPlus, Check } from "lucide-react";
+import { Plus, Calendar, Trash2, CheckSquare, MoreHorizontal, CheckCheck, X, Edit, Copy, MoveRight, Archive, ArchiveRestore, ChevronDown, Settings2, UserPlus, Check, Clock } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -71,6 +71,10 @@ interface TaskBoardViewProps {
   onArchiveTask?: (taskId: string) => void;
   onUnarchiveTask?: (taskId: string) => void;
   onUpdateTask?: (task: Task) => void;
+  /** When a list-age lockout is active, the id of the locked list */
+  lockedListId?: string;
+  /** The stale threshold in days for the active lockout rule */
+  staleThresholdDays?: number;
 }
 
 // Timestamp of the last drag-end. Used to suppress the synthetic click that
@@ -93,7 +97,7 @@ const DEFAULT_BOARD_VIEW: BoardViewSettings = {
 const BOARD_VIEW_KEY = "sf_board_view";
 const COVER_HEIGHTS: Record<BoardCardSize, number> = { small: 80, medium: 130, large: 200 };
 
-function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onArchiveTask, isMobile, view = DEFAULT_BOARD_VIEW, members, onUpdateTask }: {
+function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onArchiveTask, isMobile, view = DEFAULT_BOARD_VIEW, members, onUpdateTask, lockedListId, staleThresholdDays }: {
   task: Task;
   visibleFields: CustomFieldDefinition[];
   onSelect: () => void;
@@ -110,11 +114,19 @@ function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, 
   view?: BoardViewSettings;
   members?: WorkspaceMember[];
   onUpdateTask?: (task: Task) => void;
+  lockedListId?: string;
+  staleThresholdDays?: number;
 }) {
   const priority = PRIORITIES.find(p => p.value === task.priority);
   const statusList = allStatuses || DEFAULT_STATUSES;
   const status = statusList.find(s => s.id === task.status) || DEFAULT_STATUSES.find(s => s.id === task.status);
   const assignees = task.assignees ?? (task.assignee ? [task.assignee] : []);
+
+  // Days-in-list badge: shown when this task is in the locked list
+  const staleDays = (lockedListId && task.listId === lockedListId && task.createdAt)
+    ? Math.floor((Date.now() - new Date(task.createdAt).getTime()) / 86_400_000)
+    : null;
+  const isOverStale = staleDays !== null && staleThresholdDays !== undefined && staleDays >= staleThresholdDays;
   // isMobile now passed as prop — no hook call per card
 
   const getFieldValue = (fieldId: string) => {
@@ -231,7 +243,20 @@ function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, 
         isMobile ? "px-1.5 pt-1 pb-0.5" : dense.hPad,
         (task.photos?.length ?? 0) === 0 && !heroThumb && "border-b border-border/60"
       )}>
-        <span className={cn("font-mono font-bold text-primary tracking-wide", dense.job)}>{task.jobNumber ?? "—"}</span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className={cn("font-mono font-bold text-primary tracking-wide shrink-0", dense.job)}>{task.jobNumber ?? "—"}</span>
+          {staleDays !== null && (
+            <span className={cn(
+              "flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold shrink-0",
+              isOverStale
+                ? "bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-400"
+                : "bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400"
+            )}>
+              <Clock className="h-2.5 w-2.5 shrink-0" />
+              {staleDays}d
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1.5">
           {priority && (
             <div className="flex items-center gap-1.5">
@@ -386,7 +411,7 @@ function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, 
 // Memoize TaskCard so it only re-renders when its own props change
 const MemoTaskCard = memo(TaskCard);
 
-function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onArchiveTask, isMobile, view, members, onUpdateTask }: {
+function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onArchiveTask, isMobile, view, members, onUpdateTask, lockedListId, staleThresholdDays }: {
   task: Task;
   visibleFields: CustomFieldDefinition[];
   onSelect: () => void;
@@ -402,6 +427,8 @@ function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effective
   view?: BoardViewSettings;
   members?: WorkspaceMember[];
   onUpdateTask?: (task: Task) => void;
+  lockedListId?: string;
+  staleThresholdDays?: number;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
@@ -441,6 +468,8 @@ function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effective
         view={view}
         members={members}
         onUpdateTask={onUpdateTask}
+        lockedListId={lockedListId}
+        staleThresholdDays={staleThresholdDays}
       />
     </div>
   );
@@ -501,6 +530,8 @@ export function TaskBoardView({
   onArchiveTask,
   onUnarchiveTask,
   onUpdateTask,
+  lockedListId,
+  staleThresholdDays,
 }: TaskBoardViewProps) {
   const baseStatuses = customStatuses || DEFAULT_STATUSES;
   const isMobile = useIsMobile();
@@ -830,6 +861,8 @@ export function TaskBoardView({
                         view={view}
                         members={members}
                         onUpdateTask={onUpdateTask}
+                        lockedListId={lockedListId}
+                        staleThresholdDays={staleThresholdDays}
                       />
                     ))}
 

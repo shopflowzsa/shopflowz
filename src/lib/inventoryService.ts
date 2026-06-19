@@ -21,6 +21,16 @@ export interface InventoryItem {
   // Pack sales configuration
   packSize?: number; // Number of units per pack (e.g., 5 means "sell in packs of 5")
   packPrice?: number; // Price per pack (if different from price * packSize)
+  // Multi-image support (for clothing, multiple angles, etc.)
+  extraImages?: string[];
+  // Named variants with per-variant stock (sizes, colours, etc.)
+  productVariants?: Array<{
+    id: string;
+    name: string;   // e.g. "Red / Large"
+    price?: number; // overrides base price when set
+    stock: number;
+    sku?: string;
+  }>;
   createdAt: Date;
   updatedAt: Date;
 }

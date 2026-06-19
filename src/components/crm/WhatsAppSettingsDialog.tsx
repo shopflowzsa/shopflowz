@@ -492,6 +492,28 @@ export function WhatsAppSettingsDialog({ open, onClose, customFields }: Props) {
 
                 <Separator />
 
+                {/* ── Conversation Re-opener ──────────────────────────── */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium">Conversation Re-opener Template</Label>
+                  <p className="text-xs text-muted-foreground">
+                    When staff send a message after the 24-hour window closes, this template is sent first
+                    to re-open the conversation. The staff's message is queued and auto-sent the moment
+                    the client replies.
+                  </p>
+                  <Input
+                    placeholder="e.g. conversation_reopen"
+                    value={settings.reopenerTemplate ?? ""}
+                    onChange={(e) => update({ reopenerTemplate: e.target.value.trim().toLowerCase() })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Create and approve this template in Meta Business Manager first.
+                    It should say something like: <em>"Hi [name], we have an update on your repair. Please reply to continue."</em>
+                    — one optional variable for the contact name is supported.
+                  </p>
+                </div>
+
+                <Separator />
+
                 {/* ── Second Message ──────────────────────────────────── */}
                 <div className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
                   <div className="space-y-0.5">

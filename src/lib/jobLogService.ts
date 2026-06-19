@@ -10,6 +10,48 @@ import { supabaseServiceRole } from "@/lib/supabase";
 import { Task } from "@/types/crm";
 
 /**
+ * Reconcile recent job_log entries against the tasks table.
+ * Inserts any tasks created in the last 7 days that are missing from the
+ * tasks table (ON CONFLICT DO NOTHING — existing tasks are never overwritten).
+ * Safe to call on every page load; the realtime subscription picks up any
+ * newly inserted rows and adds them to the in-memory workspace state.
+ */
+export async function reconcileRecentJobLog(workspaceId: string): Promise<void> {
+  try {
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: logRows, error } = await supabaseServiceRole
+      .from("job_log")
+      .select("task_id, full_task")
+      .eq("workspace_id", workspaceId)
+      .gte("created_at", cutoff);
+    if (error || !logRows?.length) return;
+
+    const rows = logRows
+      .filter(r => r.task_id && r.full_task)
+      .map(r => ({
+        id: r.task_id as string,
+        workspace_id: workspaceId,
+        data: r.full_task,
+        updated_at: new Date().toISOString(),
+      }));
+    if (!rows.length) return;
+
+    // ignoreDuplicates: true → INSERT ... ON CONFLICT DO NOTHING
+    // Never overwrites an existing task with stale job_log data.
+    const { error: upsertErr } = await supabaseServiceRole
+      .from("tasks")
+      .upsert(rows, { onConflict: "id", ignoreDuplicates: true });
+    if (upsertErr) {
+      console.warn("[JobLog] Reconcile failed:", upsertErr.message);
+    } else {
+      console.log(`[JobLog] Reconcile checked ${rows.length} recent job(s)`);
+    }
+  } catch (err) {
+    console.warn("[JobLog] Reconcile exception:", err);
+  }
+}
+
+/**
  * Write a new task to the job_log table.
  * Fires-and-forgets — errors are logged but never crash the app.
  */
