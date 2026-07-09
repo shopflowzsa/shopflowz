@@ -36,6 +36,7 @@ interface EditState {
   has_api_key: boolean;
   is_enabled: boolean;
   visibility_mode: AgentVisibility;
+  web_search_enabled: boolean;
   selectedUids: string[];
 }
 
@@ -49,6 +50,7 @@ function blankEditState(): EditState {
     has_api_key: false,
     is_enabled: true,
     visibility_mode: 'all',
+    web_search_enabled: false,
     selectedUids: [],
   };
 }
@@ -92,6 +94,7 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
       has_api_key: agent.has_api_key,
       is_enabled: agent.is_enabled,
       visibility_mode: agent.visibility_mode,
+      web_search_enabled: agent.web_search_enabled,
       selectedUids,
     });
   };
@@ -108,6 +111,7 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
       api_key: editing.api_key.trim(),
       is_enabled: editing.is_enabled,
       visibility_mode: editing.visibility_mode,
+      web_search_enabled: editing.web_search_enabled,
       selectedUids: editing.selectedUids,
     };
     const result = editing.id
@@ -181,6 +185,7 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
                       <p className="text-sm font-medium truncate">{agent.agent_name}</p>
                       <p className="text-xs text-muted-foreground truncate">
                         {agent.model} · {agent.visibility_mode === 'all' ? 'Everyone' : 'Specific staff'}
+                        {agent.web_search_enabled && ' · Web search'}
                         {!agent.has_api_key && ' · No API key'}
                       </p>
                     </div>
@@ -364,6 +369,24 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
                 <div
                   className={`w-5 h-5 bg-white rounded-full transition-transform ${
                     editing.is_enabled ? 'translate-x-6' : 'translate-x-0.5'
+                  }`}
+                />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <div>
+                <Label>Web search</Label>
+                <p className="text-xs text-muted-foreground">Let this agent look up current information online (e.g. prices)</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditing({ ...editing, web_search_enabled: !editing.web_search_enabled })}
+                className={`w-12 h-6 rounded-full transition-colors ${editing.web_search_enabled ? 'bg-violet-600' : 'bg-slate-600'}`}
+              >
+                <div
+                  className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                    editing.web_search_enabled ? 'translate-x-6' : 'translate-x-0.5'
                   }`}
                 />
               </button>

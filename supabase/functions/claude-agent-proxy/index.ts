@@ -135,7 +135,7 @@ async function handleChat(
 
   const { data: agent } = await admin
     .from("custom_ai_agents")
-    .select("api_key, model, system_prompt, is_enabled, visibility_mode")
+    .select("api_key, model, system_prompt, is_enabled, visibility_mode, web_search_enabled")
     .eq("id", agent_id)
     .eq("workspace_id", workspaceId)
     .maybeSingle();
@@ -153,6 +153,12 @@ async function handleChat(
     if (!access) return jsonResponse({ error: "Not permitted to use this agent" }, 403);
   }
 
+  // Basic (non-dynamic-filtering) web search — works across every Claude
+  // model, since the agent's model is a free-text field the owner controls.
+  const tools = agent.web_search_enabled
+    ? [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }]
+    : undefined;
+
   const resp = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -165,6 +171,7 @@ async function handleChat(
       system: agent.system_prompt || "You are a helpful assistant.",
       max_tokens: 1024,
       messages,
+      ...(tools ? { tools } : {}),
     }),
   });
 
@@ -174,7 +181,14 @@ async function handleChat(
   }
 
   const data = await resp.json();
-  const answer = data?.content?.[0]?.text ?? "";
+  // With web search enabled, content interleaves text blocks with
+  // server_tool_use / web_search_tool_result blocks — concatenate every
+  // text block in order rather than assuming content[0] is the answer.
+  const answer = (data?.content ?? [])
+    .filter((block: { type: string }) => block.type === "text")
+    .map((block: { text: string }) => block.text)
+    .join("\n")
+    .trim();
   if (!answer) return jsonResponse({ error: "Empty response from upstream" }, 502);
 
   return jsonResponse({ answer });
