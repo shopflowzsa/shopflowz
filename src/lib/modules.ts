@@ -41,6 +41,7 @@ export const SIDEBAR_MODULES: ModuleDef[] = [
   { key: "tech_datasheets",       label: "Tech Data Sheets",      group: "Tools & AI" },
   { key: "ai_bot_warnings",       label: "AI Bot Warnings",       group: "Tools & AI" },
   { key: "ai_assistant",          label: "AI Assistant",          group: "Tools & AI" },
+  { key: "custom_ai_agents",      label: "Custom AI Agents",      group: "Tools & AI" },
 
   { key: "whatsapp",              label: "WhatsApp",              group: "Channels & Devices" },
   { key: "printer",               label: "Printer",               group: "Channels & Devices" },
@@ -61,8 +62,8 @@ export const MODULE_GROUPS: string[] = SIDEBAR_MODULES.reduce<string[]>((acc, m)
 // these defaults are the fallback when a plan has no explicit module list yet.
 export const DEFAULT_PLAN_MODULES: Record<string, string[]> = {
   free:    ["crm", "email", "ecommerce", "settings", "sales", "inventory", "job_register", "printer"],
-  starter: ["crm", "email", "ecommerce", "settings", "sales", "inventory", "job_register", "printer", "business_planning", "outstanding_tasks", "ai_assistant"],
-  growth:  ["crm", "email", "ecommerce", "settings", "sales", "inventory", "job_register", "printer", "business_planning", "outstanding_tasks", "ai_assistant", "banking", "analytics", "staff_reports", "performance_analytics", "ai_bot_warnings", "whatsapp"],
+  starter: ["crm", "email", "ecommerce", "settings", "sales", "inventory", "job_register", "printer", "business_planning", "outstanding_tasks", "ai_assistant", "custom_ai_agents"],
+  growth:  ["crm", "email", "ecommerce", "settings", "sales", "inventory", "job_register", "printer", "business_planning", "outstanding_tasks", "ai_assistant", "custom_ai_agents", "banking", "analytics", "staff_reports", "performance_analytics", "ai_bot_warnings", "whatsapp"],
   pro:     SIDEBAR_MODULES.map((m) => m.key),
 };
 
