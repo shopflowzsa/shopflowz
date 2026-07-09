@@ -4,9 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Bot, AlertTriangle, Clock } from "lucide-react";
+import { Bot, AlertTriangle, Clock, Receipt } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { recordStaleReason, type StaleTaskHit } from "@/lib/staleTaskService";
+import { recordStaleReason, type StaleTaskHit, type InvoicedTaskHit } from "@/lib/staleTaskService";
 import { loadSRSettings, type SRBotSettings } from "@/lib/srAgentService";
 import { useVoice } from "@/hooks/useVoice";
 
@@ -202,7 +202,7 @@ export function StaleTaskAcknowledgeDialog({
           </DialogTitle>
         </DialogHeader>
         <DialogDescription>
-          {hits.length} task{hits.length > 1 ? "s have" : " has"} been sitting too long. Tell me why and I'll log it.
+          {hits.length} task{hits.length > 1 ? "s have" : " has"} been sitting too long. Tell me why and I&apos;ll log it.
         </DialogDescription>
 
         <div className="flex-1 overflow-y-auto pr-2 space-y-3">
@@ -265,7 +265,7 @@ export function StaleTaskAcknowledgeDialog({
 
         <div className="pt-3 border-t flex items-center justify-between gap-2">
           <p className="text-xs text-muted-foreground">
-            Snoozed for 24 hours after logging. I'll ask again tomorrow if the task is still sitting.
+            Snoozed for 24 hours after logging. I&apos;ll ask again tomorrow if the task is still sitting.
           </p>
           <div className="flex gap-2">
             <Button variant="outline" onClick={onClose} disabled={submitting}>
@@ -277,6 +277,125 @@ export function StaleTaskAcknowledgeDialog({
               className="bg-cyan-600 hover:bg-cyan-700"
             >
               {submitting ? "Logging…" : "Submit reasons"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Variant C: Invoice collected — unit still in storage ──────────────────
+// Shown on app load when a task has an invoice but is still sitting in the
+// watched folder/list. Staff must acknowledge each hit before dismissing.
+export function InvoicedTaskWarningDialog({
+  open,
+  onClose,
+  workspaceId,
+  userId,
+  userName,
+  hits,
+}: BaseProps & {
+  hits: InvoicedTaskHit[];
+}) {
+  const { toast } = useToast();
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (open) setNotes({});
+  }, [open, hits.length]);
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    try {
+      for (const h of hits) {
+        await recordStaleReason({
+          workspaceId,
+          taskId: h.task.id,
+          taskTitle: h.task.title,
+          userId,
+          userName,
+          reason: "Invoice raised — unit still in storage",
+          note: (notes[h.task.id] || "").trim() || null,
+          snoozeHours: 24,
+        });
+      }
+      toast({
+        title: "Acknowledged",
+        description: `${hits.length} invoiced task${hits.length > 1 ? "s" : ""} logged.`,
+      });
+      onClose();
+    } catch (err) {
+      console.error(err);
+      toast({ title: "Failed to log", variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (hits.length === 0) return null;
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-3xl max-h-[85vh] overflow-hidden flex flex-col">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Bot className="h-5 w-5 text-cyan-500" />
+            SR Assistant says:
+          </DialogTitle>
+        </DialogHeader>
+        <DialogDescription>
+          {hits.length} job{hits.length > 1 ? "s have" : " has"} an invoice but the unit is still in storage. Did the customer already collect?
+        </DialogDescription>
+
+        <div className="flex-1 overflow-y-auto pr-2 space-y-3">
+          {hits.map((h) => (
+            <div key={h.task.id} className="rounded-lg border bg-orange-50 border-orange-200 p-3 space-y-2">
+              <div className="flex items-start gap-2">
+                <Receipt className="h-5 w-5 text-orange-500 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-orange-900 break-words">{h.task.title}</p>
+                  <p className="text-xs text-orange-700">
+                    {h.listName ? `${h.listName} · ` : ""}
+                    Invoice <strong>{h.invoice.invoiceNumber}</strong>
+                    {" · "}
+                    {h.invoice.customerName}
+                    {h.invoice.total != null && ` · R${h.invoice.total.toFixed(2)}`}
+                  </p>
+                  <p className="text-xs text-orange-600 mt-0.5">
+                    {h.rule.warning_message || "This unit has been invoiced but is still showing in storage. Please check with the technician."}
+                  </p>
+                </div>
+              </div>
+              <div>
+                <Label className="text-xs text-orange-900">Note (optional)</Label>
+                <Textarea
+                  rows={2}
+                  value={notes[h.task.id] || ""}
+                  onChange={(e) => setNotes((prev) => ({ ...prev, [h.task.id]: e.target.value }))}
+                  placeholder="e.g. Customer collecting tomorrow, waiting for payment..."
+                  className="bg-white border-orange-200 text-sm"
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="pt-3 border-t flex items-center justify-between gap-2">
+          <p className="text-xs text-muted-foreground">
+            Snoozed 24 hours after logging. I&apos;ll remind again tomorrow if the unit is still here.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={onClose} disabled={submitting}>
+              Remind me later
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="bg-orange-600 hover:bg-orange-700"
+            >
+              {submitting ? "Logging…" : "Acknowledge all"}
             </Button>
           </div>
         </div>

@@ -20,10 +20,10 @@ interface Props {
 }
 
 const HERO_HEIGHTS = [
-  { key: "compact", label: "Compact" },
-  { key: "standard", label: "Standard" },
-  { key: "tall", label: "Tall" },
-  { key: "full", label: "Full screen" },
+  { key: "compact", label: "Compact", hint: "2400×320px" },
+  { key: "standard", label: "Standard", hint: "2400×480px" },
+  { key: "tall", label: "Tall", hint: "2400×620px" },
+  { key: "full", label: "Full screen", hint: "2400×900px" },
 ] as const;
 
 export function StoreDesignStudio({ open, onClose }: Props) {
@@ -35,6 +35,8 @@ export function StoreDesignStudio({ open, onClose }: Props) {
   const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
   const [logoUploading, setLogoUploading] = useState(false);
   const [heroUploadingIdx, setHeroUploadingIdx] = useState<number | null>(null);
+  const [overlayUploadingIdx, setOverlayUploadingIdx] = useState<number | null>(null);
+  const [editingSlideIdx, setEditingSlideIdx] = useState<number | null>(null);
 
   useEffect(() => {
     if (!open || !workspaceId) return;
@@ -60,9 +62,27 @@ export function StoreDesignStudio({ open, onClose }: Props) {
     setHeroUploadingIdx(i);
     try {
       const url = await uploadImageToCloudinary(file, `hero/${workspaceId}`);
-      if (url) updateSlide(i, "image", url);
+      if (url) {
+        // Auto-size: fill-width shows the full image at full banner width,
+        // clipping only the bottom if the image is taller than the banner.
+        const heroSlides = draft.heroSlides ?? [];
+        const updated = heroSlides.map((s, j) => j === i
+          ? { ...s, image: url, imageFit: "fill-width", imagePosition: "top", imageWidth: 100, imageHeight: 100 }
+          : s
+        );
+        set("heroSlides", updated);
+      }
     } catch { toast({ title: "Upload failed", variant: "destructive" }); }
     finally { setHeroUploadingIdx(null); }
+  };
+
+  const uploadOverlay = async (i: number, file: File) => {
+    setOverlayUploadingIdx(i);
+    try {
+      const url = await uploadImageToCloudinary(file, `hero-overlay/${workspaceId}`);
+      if (url) updateSlide(i, "overlayImage", url);
+    } catch { toast({ title: "Upload failed", variant: "destructive" }); }
+    finally { setOverlayUploadingIdx(null); }
   };
 
   const uploadLogo = async (file: File) => {
@@ -192,7 +212,10 @@ export function StoreDesignStudio({ open, onClose }: Props) {
                       const active = (draft.heroHeight ?? "standard") === h.key;
                       return (
                         <button key={h.key} type="button" onClick={() => set("heroHeight", h.key)}
-                          className={`px-2.5 py-1 rounded text-xs border ${active ? "bg-emerald-600 text-white border-emerald-600" : "bg-white border-gray-200 hover:bg-gray-50"}`}>{h.label}</button>
+                          className={`px-2.5 py-1.5 rounded text-xs border flex flex-col items-center leading-tight ${active ? "bg-emerald-600 text-white border-emerald-600" : "bg-white border-gray-200 hover:bg-gray-50"}`}>
+                          <span>{h.label}</span>
+                          <span className={`text-[9px] ${active ? "text-emerald-100" : "text-gray-400"}`}>{h.hint}</span>
+                        </button>
                       );
                     })}
                   </div>
@@ -202,12 +225,13 @@ export function StoreDesignStudio({ open, onClose }: Props) {
                   <Label className="text-xs">Slides</Label>
                   <Button size="sm" variant="outline" className="h-7" onClick={addSlide}><Plus className="h-3.5 w-3.5 mr-1" /> Add</Button>
                 </div>
+                <p className="text-[10px] text-gray-400 leading-snug">Click a slide to freeze the preview on it while you adjust settings. Click again to unfreeze.</p>
                 {heroSlides.length === 0 ? (
                   <p className="text-[11px] text-gray-400 italic">No slides — a styled banner with your store name shows instead.</p>
                 ) : (
                   <div className="space-y-2">
                     {heroSlides.map((slide, i) => (
-                      <div key={i} className="rounded-lg border bg-white p-2 space-y-1.5">
+                      <div key={i} className={`rounded-lg border bg-white p-2 space-y-1.5 cursor-pointer transition-shadow ${editingSlideIdx === i ? "ring-2 ring-emerald-500 border-emerald-400" : "hover:border-gray-300"}`} onClick={() => setEditingSlideIdx(editingSlideIdx === i ? null : i)}>
                         <div className="flex gap-2">
                           <div className="w-16 shrink-0">
                             <div className="aspect-[4/3] rounded border bg-gray-50 overflow-hidden flex items-center justify-center">
@@ -220,13 +244,136 @@ export function StoreDesignStudio({ open, onClose }: Props) {
                           </div>
                           <div className="flex-1 space-y-1">
                             <Input value={slide.image} onChange={(e) => updateSlide(i, "image", e.target.value)} placeholder="Image URL" className="h-7 text-[11px] font-mono" />
+                            <div className="flex gap-1">
+                              {(["top", "center", "bottom"] as const).map((p) => {
+                                const active = ((slide as any).imagePosition ?? "center") === p;
+                                return (
+                                  <button key={p} type="button"
+                                    onClick={() => updateSlide(i, "imagePosition", p)}
+                                    className={`flex-1 py-1 text-[10px] rounded border capitalize ${active ? "bg-blue-600 text-white border-blue-600" : "bg-white border-gray-200 hover:bg-gray-50"}`}>
+                                    {p}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="flex gap-1">
+                              {([["fill-width", "Fill width"], ["cover", "Fill (crop)"], ["contain", "Fit (letterbox)"]] as const).map(([val, label]) => {
+                                const active = ((slide as any).imageFit ?? "fill-width") === val;
+                                return (
+                                  <button key={val} type="button"
+                                    onClick={() => updateSlide(i, "imageFit", val)}
+                                    className={`flex-1 py-1 text-[10px] rounded border ${active ? "bg-blue-600 text-white border-blue-600" : "bg-white border-gray-200 hover:bg-gray-50"}`}>
+                                    {label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="space-y-1 pt-0.5">
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] text-gray-500">Width</p>
+                                <span className="text-[10px] font-semibold text-gray-700">{(slide as any).imageWidth ?? 100}%</span>
+                              </div>
+                              <input type="range" min={20} max={200} step={5}
+                                value={(slide as any).imageWidth ?? 100}
+                                onChange={(e) => updateSlide(i, "imageWidth", Number(e.target.value))}
+                                className="w-full h-1.5 accent-blue-600 cursor-pointer" />
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] text-gray-500">Height</p>
+                                <span className="text-[10px] font-semibold text-gray-700">{(slide as any).imageHeight ?? 100}%</span>
+                              </div>
+                              <input type="range" min={20} max={200} step={5}
+                                value={(slide as any).imageHeight ?? 100}
+                                onChange={(e) => updateSlide(i, "imageHeight", Number(e.target.value))}
+                                className="w-full h-1.5 accent-blue-600 cursor-pointer" />
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] text-gray-500">Move left/right</p>
+                                <span className="text-[10px] font-semibold text-gray-700">{(slide as any).offsetX ?? 50}%</span>
+                              </div>
+                              <input type="range" min={0} max={100} step={1}
+                                value={(slide as any).offsetX ?? 50}
+                                onChange={(e) => updateSlide(i, "offsetX", Number(e.target.value))}
+                                className="w-full h-1.5 accent-blue-600 cursor-pointer" />
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] text-gray-500">Move up/down</p>
+                                <span className="text-[10px] font-semibold text-gray-700">{(slide as any).offsetY ?? 50}%</span>
+                              </div>
+                              <input type="range" min={0} max={100} step={1}
+                                value={(slide as any).offsetY ?? 50}
+                                onChange={(e) => updateSlide(i, "offsetY", Number(e.target.value))}
+                                className="w-full h-1.5 accent-blue-600 cursor-pointer" />
+                            </div>
                             <Input value={slide.heading ?? ""} onChange={(e) => updateSlide(i, "heading", e.target.value)} placeholder="Heading" className="h-7 text-xs" />
                           </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="text-[10px] text-gray-500 shrink-0">Background colour</label>
+                          <input
+                            type="color"
+                            value={(slide as any).bgColor ?? "#1a1a1a"}
+                            onChange={(e) => updateSlide(i, "bgColor", e.target.value)}
+                            className="h-7 w-10 rounded border border-gray-200 cursor-pointer p-0.5"
+                          />
+                          <span className="text-[10px] font-mono text-gray-400">{(slide as any).bgColor ?? "#1a1a1a"}</span>
+                          {(slide as any).bgColor && (slide as any).bgColor !== "#1a1a1a" && (
+                            <button type="button" onClick={() => updateSlide(i, "bgColor", "#1a1a1a")} className="text-[10px] text-gray-400 hover:text-red-500 ml-auto">Reset</button>
+                          )}
                         </div>
                         <Input value={slide.subheading ?? ""} onChange={(e) => updateSlide(i, "subheading", e.target.value)} placeholder="Subheading" className="h-7 text-xs" />
                         <div className="flex gap-1.5">
                           <Input value={slide.ctaText ?? ""} onChange={(e) => updateSlide(i, "ctaText", e.target.value)} placeholder="Button text" className="h-7 text-xs flex-1" />
                           <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500 shrink-0" onClick={() => removeSlide(i)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        </div>
+
+                        {/* Overlay / foreground image */}
+                        <div className="border-t pt-2 space-y-1.5">
+                          <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">Overlay image (optional)</p>
+                          <p className="text-[10px] text-gray-400 leading-snug">A model or product cutout placed on top of the background — use a PNG with a transparent background for best results.</p>
+                          <div className="flex gap-2 items-start">
+                            <div className="w-14 shrink-0">
+                              <div className="aspect-[3/4] rounded border bg-gray-50 overflow-hidden flex items-center justify-center">
+                                {(slide as any).overlayImage
+                                  ? <img src={(slide as any).overlayImage} alt="" className="w-full h-full object-contain" />
+                                  : <ImageIcon className="h-4 w-4 text-gray-300" />}
+                              </div>
+                              <label className="mt-1 flex items-center justify-center gap-1 text-[10px] text-blue-600 cursor-pointer hover:underline">
+                                {overlayUploadingIdx === i ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />} Upload
+                                <input type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadOverlay(i, f); e.target.value = ""; }} />
+                              </label>
+                            </div>
+                            <div className="flex-1 space-y-1">
+                              <Input value={(slide as any).overlayImage ?? ""} onChange={(e) => updateSlide(i, "overlayImage", e.target.value)} placeholder="Overlay image URL" className="h-7 text-[11px] font-mono" />
+                              <p className="text-[10px] text-gray-500">Position</p>
+                              <div className="flex gap-1">
+                                {(["left", "center", "right"] as const).map((p) => {
+                                  const active = ((slide as any).overlayPosition ?? "right") === p;
+                                  return (
+                                    <button key={p} type="button"
+                                      onClick={() => updateSlide(i, "overlayPosition", p)}
+                                      className={`flex-1 py-1 text-[10px] rounded border capitalize ${active ? "bg-gray-900 text-white border-gray-900" : "bg-white border-gray-200 hover:bg-gray-50"}`}>
+                                      {p}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <p className="text-[10px] text-gray-500">Size</p>
+                                <span className="text-[10px] font-semibold text-gray-700">{(slide as any).overlaySize ?? 90}%</span>
+                              </div>
+                              <input
+                                type="range"
+                                min={20}
+                                max={100}
+                                step={5}
+                                value={(slide as any).overlaySize ?? 90}
+                                onChange={(e) => updateSlide(i, "overlaySize", Number(e.target.value))}
+                                className="w-full accent-gray-900"
+                              />
+                              {(slide as any).overlayImage && (
+                                <button type="button" onClick={() => { updateSlide(i, "overlayImage", ""); updateSlide(i, "overlayPosition", "right"); updateSlide(i, "overlaySize", 90); }}
+                                  className="text-[10px] text-red-500 hover:underline">Remove overlay</button>
+                              )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     ))}
@@ -267,7 +414,7 @@ export function StoreDesignStudio({ open, onClose }: Props) {
               // fixed overlays (cart/checkout), so they stay inside the preview.
               style={{ transform: "translateZ(0)" }}
             >
-              {workspaceId && <PublicStore workspaceId={workspaceId} previewSettings={draft} />}
+              {workspaceId && <PublicStore workspaceId={workspaceId} previewSettings={draft} previewSlideIdx={editingSlideIdx ?? undefined} previewPaused={editingSlideIdx !== null} />}
             </div>
           )}
         </main>

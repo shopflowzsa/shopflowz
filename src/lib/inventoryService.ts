@@ -1,5 +1,38 @@
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
 import { logActivity } from "@/lib/activityTrackingService";
+import { bustPublicProductCache } from "@/lib/productService";
+
+// Voltage: 1–50V every 1V, 55–200V every 5V, 210–500V every 10V, 525–1000V every 25V, 1050–2000V every 50V
+function buildVoltageList(): string[] {
+  const out: string[] = [];
+  for (let v = 1; v <= 50; v++) out.push(`${v}V`);
+  for (let v = 55; v <= 200; v += 5) out.push(`${v}V`);
+  for (let v = 210; v <= 500; v += 10) out.push(`${v}V`);
+  for (let v = 525; v <= 1000; v += 25) out.push(`${v}V`);
+  for (let v = 1050; v <= 2000; v += 50) out.push(`${v}V`);
+  return out;
+}
+
+// Amperage: 0.1–20mA every 0.1mA, 21–100mA every 1mA, 105–500mA every 5mA,
+//           510–900mA every 10mA, 1–10A every 0.5A, 11–30A every 1A, 32–100A every 2A, 105–300A every 5A
+function buildAmperageList(): string[] {
+  const out: string[] = [];
+  for (let v = 1; v <= 200; v++) out.push(`${(v / 10).toFixed(1)}mA`);   // 0.1mA … 20.0mA
+  for (let v = 21; v <= 100; v++) out.push(`${v}mA`);                     // 21mA … 100mA
+  for (let v = 105; v <= 500; v += 5) out.push(`${v}mA`);                 // 105mA … 500mA
+  for (let v = 510; v <= 900; v += 10) out.push(`${v}mA`);                // 510mA … 900mA
+  for (let v = 2; v <= 20; v++) out.push(`${(v / 2).toFixed(1)}A`);       // 1.0A … 10.0A (step 0.5)
+  for (let v = 11; v <= 30; v++) out.push(`${v}A`);                       // 11A … 30A
+  for (let v = 32; v <= 100; v += 2) out.push(`${v}A`);                   // 32A … 100A
+  for (let v = 105; v <= 300; v += 5) out.push(`${v}A`);                  // 105A … 300A
+  return out;
+}
+
+export const VOLTAGE_RANGES: string[] = buildVoltageList();
+export const AMPERAGE_RANGES: string[] = buildAmperageList();
+
+export type VoltageRange = string;
+export type AmperageRange = string;
 
 export interface InventoryItem {
   id: string;
@@ -7,15 +40,21 @@ export interface InventoryItem {
   sku: string;
   description: string;
   category: string;
+  subcategory?: string;
+  voltageRange?: VoltageRange;
+  amperageRange?: AmperageRange;
+  rdson?: string;
+  vbe?: string;
   price: number;
   salePrice?: number; // Optional discounted price — when set, the storefront and Google Shopping feed treat this as the sale price
   costPrice: number;
   quantity: number;
   reorderLevel: number;
+  manufacturer?: string;
   supplier?: string;
   location?: string;
   imageUrl?: string;
-  status: "active" | "inactive";
+  status: "active" | "inactive" | "on_order";
   itemType?: "inventory" | "service"; // "service" = non-stocked / labour / repair charge
   barcode?: string;
   // Pack sales configuration
@@ -95,7 +134,7 @@ export const inventoryService = {
     const id = `inv_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
     await supabaseServiceRole.from('inventory').insert({ id, workspace_id: workspaceId, data: { ...item, id, createdAt: now, updatedAt: now } });
-    
+    bustPublicProductCache(workspaceId);
     // Track inventory item creation
     try {
       const { data: userInfo } = await supabase.auth.getUser();
@@ -137,12 +176,12 @@ export const inventoryService = {
   },
 
   async update(workspaceId: string, id: string, data: Partial<InventoryItem>): Promise<void> {
-    const { data: existing } = await supabase.from('inventory').select('data').eq('id', id).single();
+    const { data: existing } = await supabaseServiceRole.from('inventory').select('data').eq('id', id).single();
     const existingData = existing?.data as any || {};
     const merged = { ...existingData, ...data, updatedAt: new Date().toISOString() };
     assertActiveItemHasPrice(merged);
     await supabaseServiceRole.from('inventory').update({ data: merged }).eq('id', id);
-
+    bustPublicProductCache(workspaceId);
     // Track inventory update activity
     try {
       const { data: userInfo } = await supabase.auth.getUser();
@@ -183,7 +222,7 @@ export const inventoryService = {
     
     // Delete the item
     await supabaseServiceRole.from('inventory').delete().eq('id', id);
-    
+    bustPublicProductCache(workspaceId);
     // Track inventory deletion
     try {
       const { data: userInfo } = await supabase.auth.getUser();
@@ -269,5 +308,17 @@ export const inventoryService = {
       const d = r.data as any;
       return { id: r.id, ...d, timestamp: resolveDate(d.timestamp) } as StockMovement;
     });
+  },
+
+  async getOutMovementsSince(workspaceId: string, since: Date): Promise<StockMovement[]> {
+    const { data } = await supabase
+      .from('stock_movements')
+      .select('id, data')
+      .eq('workspace_id', workspaceId)
+      .gte('created_at', since.toISOString())
+      .order('created_at', { ascending: false });
+    return (data || [])
+      .map(r => { const d = r.data as any; return { id: r.id, ...d, timestamp: resolveDate(d.timestamp) } as StockMovement; })
+      .filter(m => m.type === 'out');
   },
 };

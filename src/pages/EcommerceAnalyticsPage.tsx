@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   X, RefreshCw, Users, Eye, ShoppingCart, CreditCard,
-  TrendingUp, Search, ArrowRight, Package, BarChart2,
+  TrendingUp, Search, ArrowRight, Package, BarChart2, CheckCircle2, XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 import { getStoreAnalytics, StoreAnalytics } from "@/lib/ecommerceAnalyticsService";
+import { supabase } from "@/lib/supabase";
 import { format, subDays } from "date-fns";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
@@ -13,7 +14,10 @@ import {
 } from "recharts";
 import { cn } from "@/lib/utils";
 
-interface Props { onClose: () => void }
+interface Props {
+  onClose: () => void;
+  onNavigateToProduct?: (searchQuery: string) => void;
+}
 
 type Range = '1' | '7' | '30' | '90';
 
@@ -49,12 +53,14 @@ function FunnelBar({ label, value, max, color }: { label: string; value: number;
   );
 }
 
-export function EcommerceAnalyticsPage({ onClose }: Props) {
+export function EcommerceAnalyticsPage({ onClose, onNavigateToProduct }: Props) {
   const { workspaceId } = useAuth();
   const [range, setRange] = useState<Range>('7');
   const [data, setData] = useState<StoreAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  // Map of search query (lowercased) → matched product name or null
+  const [productMatches, setProductMatches] = useState<Record<string, string | null>>({});
 
   const load = useCallback(async () => {
     if (!workspaceId) return;
@@ -70,6 +76,30 @@ export function EcommerceAnalyticsPage({ onClose }: Props) {
   }, [workspaceId, range]);
 
   useEffect(() => { load(); }, [load]);
+
+  // When top searches change, look up which ones match a product in inventory
+  useEffect(() => {
+    if (!workspaceId || !data || data.topSearches.length === 0) return;
+    (async () => {
+      const { data: products } = await supabase
+        .from("inventory_items")
+        .select("name")
+        .eq("workspace_id", workspaceId);
+      if (!products) return;
+      const map: Record<string, string | null> = {};
+      for (const s of data.topSearches) {
+        const q = s.query.toLowerCase();
+        const words = q.split(/\s+/).filter(Boolean);
+        // Match if any product name contains all query words
+        const match = products.find((p: { name: string }) => {
+          const pn = p.name.toLowerCase();
+          return words.every(w => pn.includes(w));
+        });
+        map[q] = match ? match.name : null;
+      }
+      setProductMatches(map);
+    })();
+  }, [workspaceId, data]);
 
   const d = data;
 
@@ -212,23 +242,56 @@ export function EcommerceAnalyticsPage({ onClose }: Props) {
               <p className="text-xs text-muted-foreground py-4 text-center">No searches recorded yet</p>
             ) : (
               <div className="space-y-2 mt-1">
-                {d.topSearches.map((s, i) => (
-                  <div key={s.query} className="flex items-center gap-3">
-                    <span className="text-xs text-muted-foreground w-4 text-right tabular-nums">{i + 1}</span>
-                    <div className="flex-1">
-                      <div className="flex justify-between text-xs mb-0.5">
-                        <span className="font-medium truncate">{s.query}</span>
-                        <span className="text-muted-foreground tabular-nums ml-2">{s.count}×</span>
-                      </div>
-                      <div className="w-full bg-muted rounded-full h-1">
-                        <div
-                          className="bg-violet-500 h-1 rounded-full"
-                          style={{ width: `${Math.round((s.count / d.topSearches[0].count) * 100)}%` }}
-                        />
+                {d.topSearches.map((s, i) => {
+                  const q = s.query.toLowerCase();
+                  const matchedName = productMatches[q];
+                  const hasMatch = matchedName !== undefined;
+                  const inStock = hasMatch && matchedName !== null;
+                  const clickable = inStock && onNavigateToProduct;
+                  return (
+                    <div
+                      key={s.query}
+                      onClick={clickable ? () => { onNavigateToProduct!(matchedName!); onClose(); } : undefined}
+                      className={cn(
+                        "flex items-center gap-3 rounded-lg px-2 py-1 -mx-2 transition-colors",
+                        clickable && "cursor-pointer hover:bg-accent group"
+                      )}
+                      title={clickable ? `Open "${matchedName}" in inventory` : undefined}
+                    >
+                      <span className="text-xs text-muted-foreground w-4 text-right tabular-nums shrink-0">{i + 1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2 text-xs mb-0.5">
+                          <span className={cn("font-medium truncate", clickable && "group-hover:text-teal-500 transition-colors")}>
+                            {s.query}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {hasMatch && (
+                              inStock ? (
+                                <span className="flex items-center gap-0.5 text-[10px] font-medium text-green-600 bg-green-50 dark:bg-green-900/20 dark:text-green-400 px-1.5 py-0.5 rounded-full">
+                                  <CheckCircle2 className="h-2.5 w-2.5" /> In stock
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-0.5 text-[10px] font-medium text-amber-600 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-400 px-1.5 py-0.5 rounded-full">
+                                  <XCircle className="h-2.5 w-2.5" /> Not found
+                                </span>
+                              )
+                            )}
+                            <span className="text-muted-foreground tabular-nums">{s.count}×</span>
+                          </div>
+                        </div>
+                        <div className="w-full bg-muted rounded-full h-1">
+                          <div
+                            className={cn("h-1 rounded-full", inStock ? "bg-teal-500" : "bg-violet-500")}
+                            style={{ width: `${Math.round((s.count / d.topSearches[0].count) * 100)}%` }}
+                          />
+                        </div>
+                        {inStock && matchedName && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5 truncate">→ {matchedName}</p>
+                        )}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

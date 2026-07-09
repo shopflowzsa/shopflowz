@@ -10,7 +10,7 @@ import { loadJobSettings } from "@/lib/jobSettingsService";
 import { sbGetComments, sbInsertComment, sbDeleteComment, sbSubscribeComments } from "@/lib/supabase";
 import {
   Task, TaskStatus, TaskPriority, DEFAULT_STATUSES, PRIORITIES,
-  CustomFieldDefinition, List, TaskComment, SparePartUsage,
+  CustomFieldDefinition, List, TaskComment, SparePartUsage, Space, Folder,
 } from "@/types/crm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +46,8 @@ interface TaskDetailPanelProps {
   visibleFields: CustomFieldDefinition[];
   allFields: CustomFieldDefinition[];
   allLists: List[];
+  allSpaces?: Space[];
+  allFolders?: Folder[];
   forms?: import("@/types/crm").FormDefinition[];
   onUpdate: (updated: Task) => void;
   onMoveTask: (taskId: string, targetListId: string) => void;
@@ -64,6 +66,8 @@ interface BodyProps {
   onMoveTask: (taskId: string, listId: string) => void;
   visibleFields: CustomFieldDefinition[];
   allLists: List[];
+  allSpaces?: Space[];
+  allFolders?: Folder[];
   taskStatuses: typeof DEFAULT_STATUSES;
   inventoryItems: InventoryItem[];
   loadingInventory: boolean;
@@ -583,6 +587,7 @@ function actionVerb(action: TaskComment["action"]): string {
 
 // ── TaskPanelBody ──────────────────────────────────────────────────────────────
 function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibleFields, allLists,
+  allSpaces = [], allFolders = [],
   taskStatuses, inventoryItems, loadingInventory, technicians, members, user, isNative, takePhoto, pickFromGallery,
   handleFileInputChange, fileInputRef, cameraInputRef, formatTimestamp, showActivity = false,
   photoLocked = false, workspaceId }: BodyProps) {
@@ -714,11 +719,24 @@ function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibl
           <Select value={editedTask.listId} onValueChange={listId => { onMoveTask(editedTask.id, listId); setEditedTask({ ...editedTask, listId }); }}>
             <SelectTrigger className="h-7 border-0 bg-transparent px-1 text-xs focus:ring-0 hover:bg-accent w-full"><SelectValue /></SelectTrigger>
             <SelectContent>
-              {allLists.map(l => (
-                <SelectItem key={l.id} value={l.id}>
-                  <span className="flex items-center gap-1.5"><span>{l.icon || "📋"}</span>{l.name}</span>
-                </SelectItem>
-              ))}
+              {allLists.map(l => {
+                const parentLabel = l.parentType === "space"
+                  ? (allSpaces.find(s => s.id === l.parentId)?.name ?? "")
+                  : (() => {
+                      const folder = allFolders.find(f => f.id === l.parentId);
+                      const space = folder ? allSpaces.find(s => s.id === folder.spaceId) : null;
+                      return [space?.name, folder?.name].filter(Boolean).join(" › ");
+                    })();
+                return (
+                  <SelectItem key={l.id} value={l.id}>
+                    <span className="flex items-center gap-1.5">
+                      <span>{l.icon || "📋"}</span>
+                      <span>{l.name}</span>
+                      {parentLabel && <span className="text-muted-foreground ml-1">· {parentLabel}</span>}
+                    </span>
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
         </PropRow>
@@ -883,7 +901,7 @@ function TaskPanelBody({ editedTask, setEditedTask, onUpdate, onMoveTask, visibl
 }
 
 // ── Main exported component ────────────────────────────────────────────────────
-export function TaskDetailPanel({ task, visibleFields, allFields, allLists, forms = [], onUpdate, onMoveTask, onClose,
+export function TaskDetailPanel({ task, visibleFields, allFields, allLists, allSpaces = [], allFolders = [], forms = [], onUpdate, onMoveTask, onClose,
   isFullScreen = false, currentViewContext, onGenerateQuote, onGenerateInvoice, onGenerateAssessment }: TaskDetailPanelProps) {
   const { user, workspace, members } = useAuth();
   const isMobile = useIsMobile();
@@ -953,7 +971,7 @@ export function TaskDetailPanel({ task, visibleFields, allFields, allLists, form
 
   const bodyProps: BodyProps = {
     editedTask, setEditedTask, onUpdate, onMoveTask,
-    visibleFields, allLists, taskStatuses,
+    visibleFields, allLists, allSpaces, allFolders, taskStatuses,
     inventoryItems, loadingInventory, technicians, members, user,
     isNative, takePhoto, pickFromGallery,
     handleFileInputChange, fileInputRef, cameraInputRef,

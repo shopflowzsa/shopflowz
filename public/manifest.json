@@ -1,11 +1,11 @@
 {
-  "name": "SRClickUp - Task Management",
-  "short_name": "SRClickUp",
-  "description": "Complete task management system for Speaker Repairs SA with quotes, invoicing, and status tracking",
+  "name": "ShopFlowz - Business Platform",
+  "short_name": "ShopFlowz",
+  "description": "All-in-one business platform for South African SMEs. Online store, CRM, invoicing, inventory and more.",
   "start_url": "/?v=2",
   "display": "standalone",
   "background_color": "#0f172a",
-  "theme_color": "#1e293b",
+  "theme_color": "#1D9E75",
   "orientation": "portrait-primary",
   "icons": [
     {

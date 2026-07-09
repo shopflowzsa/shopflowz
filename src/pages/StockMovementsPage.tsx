@@ -379,12 +379,12 @@ export default function StockMovementsPage() {
               </SelectContent>
             </Select>
 
-            <Select value={selectedProductId} onValueChange={setSelectedProductId}>
+            <Select value={selectedProductId || "__none__"} onValueChange={(v) => setSelectedProductId(v === "__none__" ? "" : v)}>
               <SelectTrigger className="w-full md:w-[250px]">
                 <SelectValue placeholder="Filter by product" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">All Products</SelectItem>
+                <SelectItem value="__none__">All Products</SelectItem>
                 {inventoryItems.map((item) => (
                   <SelectItem key={item.id} value={item.id}>
                     {item.name} {item.sku && `(${item.sku})`}

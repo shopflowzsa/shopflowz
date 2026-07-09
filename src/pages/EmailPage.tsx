@@ -58,6 +58,7 @@ import {
   listImapFolders,
   type EmailAccount,
   type EmailMessage,
+  type SendAttachment,
 } from "@/lib/emailAccountService";
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -419,6 +420,29 @@ function ComposePanel({ account, workspaceId, userId, replyTo, onClose, onSent }
   const [body, setBody] = useState(replyTo
     ? `${sigBlock}\n\n---\nOn ${fmtDate(replyTo.sentDate)}, ${replyTo.fromName || replyTo.fromEmail} wrote:\n${stripHtml(replyTo.bodyHtml || replyTo.bodyText || "")}`
     : sigBlock);
+  const [attachments, setAttachments] = useState<SendAttachment[]>([]);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+
+  function handleAttachFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        // Strip the "data:<mime>;base64," prefix — backend expects raw base64
+        const base64 = dataUrl.split(",")[1] ?? dataUrl;
+        setAttachments(prev => [...prev, { filename: file.name, content: base64, contentType: file.type || "application/octet-stream" }]);
+      };
+      reader.readAsDataURL(file);
+    });
+    // Reset input so the same file can be re-added if removed
+    e.target.value = "";
+  }
+
+  function removeAttachment(index: number) {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  }
 
   async function handleSend() {
     if (!to.trim() || !subject.trim()) {
@@ -441,6 +465,7 @@ function ComposePanel({ account, workspaceId, userId, replyTo, onClose, onSent }
         cc: cc.trim() || undefined,
         subject: subject.trim(),
         text: body,
+        attachments: attachments.length ? attachments : undefined,
       });
       // Save to IMAP sent folder + DB cache (fire-and-forget)
       saveSentEmail(workspaceId, userId, {
@@ -488,7 +513,28 @@ function ComposePanel({ account, workspaceId, userId, replyTo, onClose, onSent }
           value={body}
           onChange={e => setBody(e.target.value)}
         />
+
+        {/* Attachments */}
+        {attachments.length > 0 && (
+          <div className="shrink-0 flex flex-wrap gap-1.5 pt-1">
+            {attachments.map((att, i) => (
+              <div key={i} className="flex items-center gap-1 px-2 py-1 rounded-md border bg-muted text-xs max-w-[180px]">
+                <Paperclip className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="truncate">{att.filename}</span>
+                <button onClick={() => removeAttachment(i)} className="ml-1 text-muted-foreground hover:text-destructive shrink-0">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="flex gap-2 shrink-0">
+          <input ref={attachInputRef} type="file" multiple className="hidden" onChange={handleAttachFiles} />
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => attachInputRef.current?.click()} title="Attach files">
+            <Paperclip className="h-3.5 w-3.5" />
+            Attach
+          </Button>
           <Button variant="outline" size="sm" onClick={onClose} className="flex-1">Discard</Button>
           <Button size="sm" className="flex-1 gap-1" onClick={handleSend} disabled={sending}>
             {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}

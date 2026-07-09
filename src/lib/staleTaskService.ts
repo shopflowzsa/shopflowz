@@ -16,6 +16,8 @@
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
 import type { WarningRule } from "@/components/crm/WarningRulesPanel";
 import type { Task, List } from "@/types/crm";
+import { getInvoices } from "@/lib/invoiceService";
+import type { Invoice as SupabaseInvoice } from "@/types/invoice";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -42,10 +44,11 @@ export interface StaleAcknowledgement {
  * lists doesn't reset its age. For now createdAt is a conservative proxy.
  */
 export function daysInCurrentState(task: Task): number {
-  if (!task.createdAt) return 0;
-  const created = new Date(task.createdAt).getTime();
-  if (Number.isNaN(created)) return 0;
-  return Math.floor((Date.now() - created) / MS_PER_DAY);
+  const raw = task.listEnteredAt ?? task.createdAt;
+  if (!raw) return 0;
+  const ts = new Date(raw).getTime();
+  if (Number.isNaN(ts)) return 0;
+  return Math.floor((Date.now() - ts) / MS_PER_DAY);
 }
 
 // ─── Block-new-task check (Rule A) ─────────────────────────────────────────
@@ -61,6 +64,7 @@ export function checkBlockNewInStaleList(
   tasks: Task[],
   lists: List[],
   rules: WarningRule[],
+  currentUserId?: string,
 ): { rule: WarningRule; offender: Task } | null {
   const list = lists.find((l) => l.id === listId);
   if (!list) return null;
@@ -70,13 +74,21 @@ export function checkBlockNewInStaleList(
     if (rule.rule_type !== "block_new_in_stale_list") continue;
     if (!rule.stale_threshold_days || rule.stale_threshold_days <= 0) continue;
 
+    // Staff targeting
+    if (rule.apply_to_uids?.length) {
+      if (!currentUserId || !rule.apply_to_uids.includes(currentUserId)) continue;
+    }
+
     // Rule targets either a specific list or the parent folder.
     const matchesList = rule.list_id && rule.list_id === listId;
     const matchesFolder = rule.folder_id && rule.folder_id === list.parentId;
     if (!matchesList && !matchesFolder) continue;
 
+    const excludeStatuses = new Set((rule.exclude_statuses ?? []).map(s => s.toLowerCase()));
+
     // Find the oldest task in the same scope as the rule.
     const scope = tasks.filter((t) => {
+      if (excludeStatuses.size > 0 && t.status && excludeStatuses.has(t.status.toLowerCase())) return false;
       if (rule.list_id) return t.listId === rule.list_id;
       // Folder scope: any task in any list whose parent is this folder.
       const taskList = lists.find((l) => l.id === t.listId);
@@ -115,20 +127,25 @@ export async function findStaleTasks(
   tasks: Task[],
   lists: List[],
   rules: WarningRule[],
-  options: { trigger?: "on_load" | "on_open" | "daily_08" } = {},
+  options: { trigger?: "on_load" | "on_open" | "daily_08"; currentUserId?: string } = {},
 ): Promise<StaleTaskHit[]> {
-  const activeRules = rules.filter((r) =>
-    r.enabled &&
-    r.rule_type === "stale_task" &&
-    (r.stale_threshold_days ?? 0) > 0 &&
-    (!options.trigger || (r.stale_check_trigger ?? "on_load") === options.trigger),
-  );
+  const activeRules = rules.filter((r) => {
+    if (!r.enabled || r.rule_type !== "stale_task" || (r.stale_threshold_days ?? 0) <= 0) return false;
+    if (options.trigger && (r.stale_check_trigger ?? "on_load") !== options.trigger) return false;
+    // Staff targeting
+    if (r.apply_to_uids?.length) {
+      if (!options.currentUserId || !r.apply_to_uids.includes(options.currentUserId)) return false;
+    }
+    return true;
+  });
   if (activeRules.length === 0) return [];
 
   // Build hits
   const hits: StaleTaskHit[] = [];
   for (const rule of activeRules) {
+    const excludeStatuses = new Set((rule.exclude_statuses ?? []).map(s => s.toLowerCase()));
     const scope = tasks.filter((t) => {
+      if (excludeStatuses.size > 0 && t.status && excludeStatuses.has(t.status.toLowerCase())) return false;
       if (rule.list_id) return t.listId === rule.list_id;
       const taskList = lists.find((l) => l.id === t.listId);
       return taskList?.parentId === rule.folder_id;
@@ -160,6 +177,93 @@ export async function findStaleTasks(
   }
 
   return hits.filter((h) => !snoozedIds.has(h.task.id));
+}
+
+// ─── Invoice-collected check (Rule D) ──────────────────────────────────────
+
+export interface InvoicedTaskHit {
+  rule: WarningRule;
+  task: Task;
+  invoice: SupabaseInvoice;
+  listName?: string;
+}
+
+/**
+ * Fetches invoices from Supabase and finds tasks in the target folder/list
+ * that have a matching invoice (by purchaseOrder = task.jobNumber) but are
+ * still sitting in storage — meaning the customer was invoiced but staff
+ * haven't moved or closed the job.
+ *
+ * currentUserId: only rules that target this user (or everyone) fire.
+ */
+export async function checkInvoicedTasksInStorage(
+  workspaceId: string,
+  tasks: Task[],
+  lists: List[],
+  rules: WarningRule[],
+  currentUserId?: string,
+): Promise<InvoicedTaskHit[]> {
+  const activeRules = rules.filter((r) => {
+    if (!r.enabled || r.rule_type !== "invoice_collected") return false;
+    if (r.apply_to_uids && r.apply_to_uids.length > 0) {
+      if (!currentUserId) return false;
+      if (!r.apply_to_uids.includes(currentUserId)) return false;
+    }
+    return true;
+  });
+  if (activeRules.length === 0) return [];
+
+  // Fetch all invoices from Supabase and build a lookup by purchaseOrder (= job number only)
+  const allInvoices = await getInvoices(workspaceId);
+  const invoiceByJobNumber = new Map<string, SupabaseInvoice>();
+  for (const inv of allInvoices) {
+    const po = ((inv as any).purchaseOrder as string | undefined)?.toUpperCase().trim();
+    // Only index entries that look like job numbers (JOB-xxxx) to avoid false matches
+    if (po && po.startsWith("JOB-")) invoiceByJobNumber.set(po, inv);
+  }
+
+  const rawHits: InvoicedTaskHit[] = [];
+
+  for (const rule of activeRules) {
+    const excludeStatuses = new Set((rule.exclude_statuses ?? []).map(s => s.toLowerCase()));
+
+    const scope = tasks.filter((t) => {
+      if (excludeStatuses.size > 0 && t.status && excludeStatuses.has(t.status.toLowerCase())) return false;
+      if (rule.list_id) return t.listId === rule.list_id;
+      const taskList = lists.find((l) => l.id === t.listId);
+      return taskList?.parentId === rule.folder_id;
+    });
+
+    for (const task of scope) {
+      const jobKey = task.jobNumber?.toUpperCase().trim();
+      if (!jobKey || !jobKey.startsWith("JOB-")) continue;
+      const invoice = invoiceByJobNumber.get(jobKey);
+      if (!invoice) continue;
+      rawHits.push({
+        rule,
+        task,
+        invoice,
+        listName: lists.find((l) => l.id === task.listId)?.name,
+      });
+    }
+  }
+
+  if (rawHits.length === 0) return [];
+
+  // Filter out tasks already snoozed (acknowledged within the last 24h)
+  const taskIds = [...new Set(rawHits.map((h) => h.task.id))];
+  const { data: ackData } = await supabase
+    .from("stale_task_acknowledgements")
+    .select("task_id, snooze_until")
+    .eq("workspace_id", workspaceId)
+    .in("task_id", taskIds);
+  const snoozedIds = new Set<string>();
+  const now = Date.now();
+  for (const row of ackData || []) {
+    if (new Date(row.snooze_until).getTime() > now) snoozedIds.add(row.task_id);
+  }
+
+  return rawHits.filter((h) => !snoozedIds.has(h.task.id));
 }
 
 // ─── Record a stale-task acknowledgement ───────────────────────────────────

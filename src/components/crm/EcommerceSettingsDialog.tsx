@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Plus, Trash2, Loader2, Save, Store, Truck, MapPin, DollarSign, Settings2, Eye, FileText,
-  Link as LinkIcon, Globe, Copy, Check, ExternalLink, CreditCard,
+  Link as LinkIcon, Globe, Copy, Check, ExternalLink, CreditCard, Bell, MessageCircle,
 } from "lucide-react";
 import { PAYMENT_PROVIDERS } from "@/lib/paymentProviders";
 import { useToast } from "@/hooks/use-toast";
@@ -27,7 +27,13 @@ import {
   EcommerceSettings,
   DeliveryZone,
   DEFAULT_ECOMMERCE_SETTINGS,
+  WhatsAppNotifications,
 } from "@/types/ecommerce";
+import {
+  NOTIFICATION_EVENTS,
+  getDefaultTemplate,
+  NotificationEventKey,
+} from "@/lib/whatsappNotificationService";
 
 interface Props {
   open: boolean;
@@ -310,43 +316,19 @@ export function EcommerceSettingsDialog({ open, onClose, initialTab }: Props) {
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-9">
-            <TabsTrigger value="delivery">
-              <Truck className="h-4 w-4 mr-1" />
-              Delivery
-            </TabsTrigger>
-            <TabsTrigger value="pickup">
-              <MapPin className="h-4 w-4 mr-1" />
-              Pickup
-            </TabsTrigger>
-            <TabsTrigger value="payments">
-              <CreditCard className="h-4 w-4 mr-1" />
-              Payment
-            </TabsTrigger>
-            <TabsTrigger value="store">
-              <Store className="h-4 w-4 mr-1" />
-              Store Info
-            </TabsTrigger>
-            <TabsTrigger value="services">
-              <Settings2 className="h-4 w-4 mr-1" />
-              Services
-            </TabsTrigger>
-            <TabsTrigger value="policies">
-              <FileText className="h-4 w-4 mr-1" />
-              Policies
-            </TabsTrigger>
-            <TabsTrigger value="other">
-              <Settings2 className="h-4 w-4 mr-1" />
-              Other
-            </TabsTrigger>
-            <TabsTrigger value="courier">
-              <Truck className="h-4 w-4 mr-1" />
-              Courier
-            </TabsTrigger>
-            <TabsTrigger value="storeurl">
-              <Globe className="h-4 w-4 mr-1" />
-              Store URL
-            </TabsTrigger>
+          <TabsList className="grid w-full grid-cols-5 mb-1">
+            <TabsTrigger value="delivery"><Truck className="h-4 w-4 mr-1" />Delivery</TabsTrigger>
+            <TabsTrigger value="pickup"><MapPin className="h-4 w-4 mr-1" />Pickup</TabsTrigger>
+            <TabsTrigger value="payments"><CreditCard className="h-4 w-4 mr-1" />Payment</TabsTrigger>
+            <TabsTrigger value="store"><Store className="h-4 w-4 mr-1" />Store</TabsTrigger>
+            <TabsTrigger value="services"><Settings2 className="h-4 w-4 mr-1" />Services</TabsTrigger>
+          </TabsList>
+          <TabsList className="grid w-full grid-cols-5">
+            <TabsTrigger value="policies"><FileText className="h-4 w-4 mr-1" />Policies</TabsTrigger>
+            <TabsTrigger value="other"><Settings2 className="h-4 w-4 mr-1" />Other</TabsTrigger>
+            <TabsTrigger value="courier"><Truck className="h-4 w-4 mr-1" />Courier</TabsTrigger>
+            <TabsTrigger value="storeurl"><Globe className="h-4 w-4 mr-1" />Store URL</TabsTrigger>
+            <TabsTrigger value="notifications"><Bell className="h-4 w-4 mr-1" />Notify</TabsTrigger>
           </TabsList>
 
           {/* Delivery Settings */}
@@ -758,6 +740,46 @@ export function EcommerceSettingsDialog({ open, onClose, initialTab }: Props) {
                   checked={(settings as any).showSku ?? true}
                   onCheckedChange={(checked) => setSettings(prev => ({ ...prev, showSku: checked } as any))}
                 />
+              </div>
+
+              <Separator />
+
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Similar Parts Finder</Label>
+                <p className="text-xs text-gray-500">
+                  Adds a "Find Similar Parts" button on product detail pages. Useful for electronics stores where customers need substitute components — disable for clothing or general retail.
+                </p>
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label className="font-normal">Enable Similar Parts Finder</Label>
+                    <p className="text-xs text-gray-500">Show a button to find substitutes or compatible parts</p>
+                  </div>
+                  <Switch
+                    checked={(settings as any).enableSimilarParts ?? false}
+                    onCheckedChange={(checked) => setSettings(prev => ({ ...prev, enableSimilarParts: checked } as any))}
+                  />
+                </div>
+                {(settings as any).enableSimilarParts && (
+                  <div className="space-y-2 pt-1">
+                    <div className="flex justify-between items-center">
+                      <Label className="font-normal text-sm">Similarity Threshold</Label>
+                      <span className="text-sm font-semibold text-orange-600">{(settings as any).similarPartsThreshold ?? 30}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={(settings as any).similarPartsThreshold ?? 30}
+                      onChange={(e) => setSettings(prev => ({ ...prev, similarPartsThreshold: Number(e.target.value) } as any))}
+                      className="w-full accent-orange-500"
+                    />
+                    <div className="flex justify-between text-xs text-gray-400">
+                      <span>0% (all same-category)</span>
+                      <span>100% (exact spec match)</span>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </TabsContent>
@@ -1358,6 +1380,140 @@ export function EcommerceSettingsDialog({ open, onClose, initialTab }: Props) {
                   </div>
                 )}
             </div>
+          </TabsContent>
+
+          {/* ── WhatsApp Notifications ── */}
+          <TabsContent value="notifications" className="space-y-4 mt-4">
+            <div className="flex items-start gap-3 p-3 bg-green-50 border border-green-200 rounded-lg">
+              <MessageCircle className="h-5 w-5 text-green-600 mt-0.5 shrink-0" />
+              <div className="text-sm text-green-800">
+                <p className="font-semibold">WhatsApp Notification Templates</p>
+                <p className="mt-0.5 text-green-700">Configure a message template for each event. Use <code className="bg-green-100 px-1 rounded text-xs">{"{variable}"}</code> placeholders — they are filled in automatically. Customer notifications open WhatsApp at checkout. Store notifications open when triggered from the admin.</p>
+              </div>
+            </div>
+
+            {(Object.keys(NOTIFICATION_EVENTS) as NotificationEventKey[]).map((key) => {
+              const meta = NOTIFICATION_EVENTS[key];
+              const tpl = settings.whatsappNotifications?.[key] ?? getDefaultTemplate(key);
+              const update = (field: string, value: unknown) =>
+                setSettings(prev => ({
+                  ...prev,
+                  whatsappNotifications: {
+                    ...prev.whatsappNotifications,
+                    [key]: { ...(prev.whatsappNotifications?.[key] ?? getDefaultTemplate(key)), [field]: value },
+                  },
+                }));
+
+              return (
+                <div key={key} className="border border-gray-200 rounded-lg overflow-hidden">
+                  {/* Header row */}
+                  <div className="flex items-center justify-between px-4 py-3 bg-gray-50 border-b border-gray-100">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-gray-900">{meta.label}</p>
+                      <p className="text-xs text-gray-500">{meta.description}</p>
+                    </div>
+                    <Switch
+                      checked={tpl.enabled}
+                      onCheckedChange={v => update('enabled', v)}
+                    />
+                  </div>
+
+                  {/* Body — only shown when enabled */}
+                  {tpl.enabled && (
+                    <div className="px-4 py-4 space-y-3">
+                      {/* Recipient */}
+                      <div>
+                        <Label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Send To</Label>
+                        <div className="flex gap-2 mt-1.5">
+                          {(['store', 'customer', 'both'] as const).map(r => (
+                            <button
+                              key={r}
+                              type="button"
+                              onClick={() => update('recipientType', r)}
+                              className={`px-3 py-1.5 rounded-md text-xs font-semibold border transition-colors capitalize ${
+                                tpl.recipientType === r
+                                  ? 'bg-green-600 text-white border-green-600'
+                                  : 'bg-white text-gray-600 border-gray-200 hover:border-green-400'
+                              }`}
+                            >
+                              {r === 'store' ? '🏪 Store' : r === 'customer' ? '👤 Customer' : '👥 Both'}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Store override number */}
+                      {(tpl.recipientType === 'store' || tpl.recipientType === 'both') && (
+                        <div>
+                          <Label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">
+                            Store WhatsApp Number
+                          </Label>
+                          <Input
+                            className="mt-1 text-sm"
+                            placeholder={`Default: ${(settings as any).storeWhatsApp || '27xxxxxxxxx'}`}
+                            value={tpl.storeNumber ?? ''}
+                            onChange={e => update('storeNumber', e.target.value)}
+                          />
+                          <p className="text-xs text-gray-400 mt-0.5">Leave blank to use the store WhatsApp number above. Format: 27xxxxxxxxx</p>
+                        </div>
+                      )}
+
+                      {/* Template message */}
+                      <div>
+                        <Label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Message Template</Label>
+                        <Textarea
+                          className="mt-1 text-sm font-mono min-h-[140px]"
+                          value={tpl.message}
+                          onChange={e => update('message', e.target.value)}
+                          placeholder={meta.defaultMessage}
+                        />
+                        <button
+                          type="button"
+                          className="mt-1 text-xs text-blue-600 hover:underline"
+                          onClick={() => update('message', meta.defaultMessage)}
+                        >
+                          Reset to default
+                        </button>
+                      </div>
+
+                      {/* Variable reference */}
+                      <div>
+                        <Label className="text-xs font-semibold text-gray-600 uppercase tracking-wide">Available Variables</Label>
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          {meta.variables.map(v => (
+                            <button
+                              key={v}
+                              type="button"
+                              title="Click to copy"
+                              onClick={() => navigator.clipboard?.writeText(`{${v}}`)}
+                              className="px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 text-xs font-mono text-gray-700 transition-colors border border-gray-200"
+                            >
+                              {`{${v}}`}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs text-gray-400 mt-1">Click a variable to copy it, then paste into the template above.</p>
+                      </div>
+
+                      {/* Preview link */}
+                      {((tpl.recipientType === 'store' || tpl.recipientType === 'both') && (tpl.storeNumber || (settings as any).storeWhatsApp)) && (
+                        <div>
+                          <a
+                            href={`https://wa.me/${(tpl.storeNumber || (settings as any).storeWhatsApp || '').replace(/\D/g, '')}?text=${encodeURIComponent(tpl.message)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs text-green-700 hover:underline"
+                          >
+                            <MessageCircle className="h-3.5 w-3.5" />
+                            Preview in WhatsApp
+                          </a>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </TabsContent>
         </Tabs>
 

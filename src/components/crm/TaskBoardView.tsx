@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
+  DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from "@/components/ui/dropdown-menu";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { LazyImage } from "@/components/ui/LazyImage";
@@ -65,7 +66,8 @@ interface TaskBoardViewProps {
   onArchiveSelected?: () => void;
   onBulkStatusChange?: (status: string) => void;
   onBulkMoveToList?: (targetListId: string) => void;
-  availableLists?: { id: string; name: string }[];
+  onDirectMoveTask?: (taskId: string, listId: string) => void;
+  availableLists?: { id: string; name: string; parentLabel?: string }[];
   // Per-task archive
   archivedTasks?: Task[];
   onArchiveTask?: (taskId: string) => void;
@@ -97,7 +99,7 @@ const DEFAULT_BOARD_VIEW: BoardViewSettings = {
 const BOARD_VIEW_KEY = "sf_board_view";
 const COVER_HEIGHTS: Record<BoardCardSize, number> = { small: 80, medium: 130, large: 200 };
 
-function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onArchiveTask, isMobile, view = DEFAULT_BOARD_VIEW, members, onUpdateTask, lockedListId, staleThresholdDays }: {
+function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onDirectMoveTask, availableLists, onArchiveTask, isMobile, view = DEFAULT_BOARD_VIEW, members, onUpdateTask, lockedListId, staleThresholdDays }: {
   task: Task;
   visibleFields: CustomFieldDefinition[];
   onSelect: () => void;
@@ -110,6 +112,8 @@ function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, 
   onDuplicateTask?: (task: Task) => void;
   onEditTask?: (task: Task) => void;
   onMoveTask?: (task: Task) => void;
+  onDirectMoveTask?: (taskId: string, listId: string) => void;
+  availableLists?: { id: string; name: string; parentLabel?: string }[];
   isMobile: boolean;
   view?: BoardViewSettings;
   members?: WorkspaceMember[];
@@ -319,17 +323,31 @@ function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, 
                   Duplicate
                 </DropdownMenuItem>
               )}
-              {onMoveTask && (
+              {(onDirectMoveTask && availableLists && availableLists.length > 0) ? (
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger onPointerDown={e => e.stopPropagation()}>
+                    <MoveRight className="h-3.5 w-3.5 mr-2" />
+                    Move to List
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="max-h-72 overflow-y-auto w-64">
+                    {availableLists.map(l => (
+                      <DropdownMenuItem
+                        key={l.id}
+                        onClick={(e) => { e.stopPropagation(); onDirectMoveTask(task.id, l.id); }}
+                      >
+                        {l.name}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              ) : onMoveTask ? (
                 <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onMoveTask(task);
-                  }}
+                  onClick={(e) => { e.stopPropagation(); onMoveTask(task); }}
                 >
                   <MoveRight className="h-3.5 w-3.5 mr-2" />
                   Move to List
                 </DropdownMenuItem>
-              )}
+              ) : null}
               {onArchiveTask && (
                 <DropdownMenuItem
                   onClick={(e) => {
@@ -411,7 +429,7 @@ function TaskCard({ task, visibleFields, onSelect, dragHandleProps, isDragging, 
 // Memoize TaskCard so it only re-renders when its own props change
 const MemoTaskCard = memo(TaskCard);
 
-function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onArchiveTask, isMobile, view, members, onUpdateTask, lockedListId, staleThresholdDays }: {
+function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effectiveOnToggleSelect, allStatuses, onDeleteTask, onDuplicateTask, onEditTask, onMoveTask, onDirectMoveTask, availableLists, onArchiveTask, isMobile, view, members, onUpdateTask, lockedListId, staleThresholdDays }: {
   task: Task;
   visibleFields: CustomFieldDefinition[];
   onSelect: () => void;
@@ -422,6 +440,8 @@ function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effective
   onDuplicateTask?: (task: Task) => void;
   onEditTask?: (task: Task) => void;
   onMoveTask?: (task: Task) => void;
+  onDirectMoveTask?: (taskId: string, listId: string) => void;
+  availableLists?: { id: string; name: string; parentLabel?: string }[];
   onArchiveTask?: (taskId: string) => void;
   isMobile: boolean;
   view?: BoardViewSettings;
@@ -463,6 +483,8 @@ function SortableTaskCard({ task, visibleFields, onSelect, isSelected, effective
         onDuplicateTask={onDuplicateTask}
         onEditTask={onEditTask}
         onMoveTask={onMoveTask}
+        onDirectMoveTask={onDirectMoveTask}
+        availableLists={availableLists}
         onArchiveTask={onArchiveTask}
         isMobile={isMobile}
         view={view}
@@ -522,6 +544,7 @@ export function TaskBoardView({
   onDuplicateTask,
   onEditTask,
   onMoveTask,
+  onDirectMoveTask,
   onArchiveSelected,
   onBulkStatusChange,
   onBulkMoveToList,
@@ -856,6 +879,8 @@ export function TaskBoardView({
                         onDuplicateTask={onDuplicateTask}
                         onEditTask={onEditTask}
                         onMoveTask={onMoveTask}
+                        onDirectMoveTask={onDirectMoveTask}
+                        availableLists={availableLists}
                         onArchiveTask={onArchiveTask}
                         isMobile={isMobile}
                         view={view}

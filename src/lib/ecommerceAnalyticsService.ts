@@ -65,22 +65,35 @@ export async function getStoreAnalytics(
   dateTo: string,
 ): Promise<StoreAnalytics | null> {
   try {
-    const { data: events, error } = await supabaseServiceRole
-      .from('store_events')
-      .select('session_id, event_type, product_id, product_name, search_query, created_at')
-      .eq('workspace_id', workspaceId)
-      .gte('created_at', `${dateFrom}T00:00:00Z`)
-      .lte('created_at', `${dateTo}T23:59:59Z`);
-
-    if (error || !events) return null;
-
-    const empty: StoreAnalytics = {
-      totalPageViews: 0, uniqueVisitors: 0, totalSearches: 0,
-      totalAddToCart: 0, totalCheckoutStarts: 0, totalPurchases: 0,
-      totalRegistrations: 0, conversionRate: 0,
-      topProducts: [], topSearches: [], dailyStats: [],
-    };
-    if (events.length === 0) return empty;
+    // Paginate in 1000-row pages — PostgREST's max-rows default is 1000.
+    // Using PAGE > max-rows means the server returns max-rows and we incorrectly
+    // think there's no more data. PAGE must equal max-rows so that receiving
+    // exactly PAGE rows signals "there may be more".
+    const PAGE = 1000;
+    let events: any[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabaseServiceRole
+        .from('store_events')
+        .select('session_id, event_type, product_id, product_name, search_query, created_at')
+        .eq('workspace_id', workspaceId)
+        .gte('created_at', `${dateFrom}T00:00:00Z`)
+        .lte('created_at', `${dateTo}T23:59:59Z`)
+        .order('created_at', { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) return null;
+      events = events.concat(data ?? []);
+      if ((data ?? []).length < PAGE) break;
+      from += PAGE;
+    }
+    if (events.length === 0) {
+      return {
+        totalPageViews: 0, uniqueVisitors: 0, totalSearches: 0,
+        totalAddToCart: 0, totalCheckoutStarts: 0, totalPurchases: 0,
+        totalRegistrations: 0, conversionRate: 0,
+        topProducts: [], topSearches: [], dailyStats: [],
+      };
+    }
 
     const uniqueSessions = new Set(events.map(e => e.session_id)).size;
     const byType = (type: string) => events.filter(e => e.event_type === type);

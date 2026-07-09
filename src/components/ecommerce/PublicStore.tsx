@@ -33,6 +33,8 @@ import {
   Save,
   Copy,
   DollarSign,
+  Heart,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,6 +68,11 @@ const FLIP_STYLES = `
     overflow: hidden;
   }
   .flip-card-back { transform: rotateY(180deg); }
+  @media (hover: none) {
+    .flip-card:hover .flip-card-inner { transform: none; }
+    .flip-card-inner { transform: none !important; }
+    .flip-card-back { display: none; }
+  }
 
   @keyframes cardEntrance {
     from { opacity: 0; transform: rotateY(-30deg) translateY(20px); }
@@ -109,7 +116,14 @@ const calculateTotal = (subtotal: number, deliveryFee: number, settings?: Ecomme
 };
 
 // ─── Stock pill ───────────────────────────────────────────────────────────────
-function StockPill({ inStock, qty }: { inStock: boolean; qty?: number }) {
+function StockPill({ inStock, qty, onOrder }: { inStock: boolean; qty?: number; onOrder?: boolean }) {
+  if (onOrder)
+    return (
+      <span className="flex items-center gap-1 text-xs text-blue-600 font-medium">
+        <span className="inline-block w-2 h-2 rounded-full bg-blue-500" />
+        Special Order · 2 days to dispatch
+      </span>
+    );
   if (!inStock)
     return (
       <span className="flex items-center gap-1 text-xs text-red-600 font-medium">
@@ -244,9 +258,9 @@ function StoreLoginModal({ storeName, workspaceId, onClose, onSuccess, onRegiste
 }
 
 // ─── Public Store ─────────────────────────────────────────────────────────────
-export function PublicStore({ workspaceId, previewSettings }: { workspaceId: string; previewSettings?: EcommerceSettings }) {
+export function PublicStore({ workspaceId, previewSettings, previewSlideIdx, previewPaused }: { workspaceId: string; previewSettings?: EcommerceSettings; previewSlideIdx?: number; previewPaused?: boolean }) {
   const navigate = useNavigate();
-  const { productId: routeProductId } = useParams();
+  const { productId: routeProductId, storeSlug } = useParams();
   const { user, workspace, logout, isSystemAdmin } = useAuth();
 
   // Walk-in mode: staff opens the store from admin via /store?walkin=1.
@@ -404,15 +418,22 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
   const [allProducts, setAllProducts] = useState<PublicProduct[]>([]); // full unfiltered list
   const [categories, setCategories] = useState<PublicCategory[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
+  const [selectedSubcategory, setSelectedSubcategory] = useState<string>("all");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [searchInput, setSearchInput] = useState<string>("");
   const [inStockOnly, setInStockOnly] = useState<boolean>(false);
+  const [filterVoltage, setFilterVoltage] = useState<string>("");
+  const [filterAmperage, setFilterAmperage] = useState<string>("");
   const [selectedProduct, setSelectedProduct] = useState<PublicProduct | null>(null);
   const [showCart, setShowCart] = useState<boolean>(false);
   const [showCheckout, setShowCheckout] = useState<boolean>(false);
   const [showAccount, setShowAccount] = useState<boolean>(false);
   const [showStoreLogin, setShowStoreLogin] = useState<boolean>(false);
+  const [showFashionSearch, setShowFashionSearch] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
+  const [equivalents, setEquivalents] = useState<PublicProduct[]>([]);
+  const [equivalentsLoading, setEquivalentsLoading] = useState(false);
+  const [equivalentsSearched, setEquivalentsSearched] = useState("");
   const [ecomSettings, setEcomSettings] = useState<EcommerceSettings>(previewSettings ?? DEFAULT_ECOMMERCE_SETTINGS);
 
   // Live preview: when the design studio passes draft settings, mirror them so the
@@ -544,7 +565,7 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
   useEffect(() => {
     const legacyProductId = new URLSearchParams(window.location.search).get("product");
     if (!routeProductId && legacyProductId) {
-      navigate(`/store/product/${encodeURIComponent(legacyProductId)}`, { replace: true });
+      navigate(`/store/${storeSlug}/product/${encodeURIComponent(legacyProductId)}`, { replace: true });
     }
   }, [navigate, routeProductId]);
 
@@ -582,22 +603,56 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
     }
   };
 
-  // Filter in memory whenever category or search changes — zero Supabase egress
-  useEffect(() => {
+  // Base results after text/category filters — used to derive available spec filter options
+  const specFilterBase = useMemo(() => {
     let filtered = allProducts;
-    if (selectedCategory !== "all") {
-      filtered = filtered.filter(p => p.category === selectedCategory);
-    }
+    if (selectedCategory !== "all") filtered = filtered.filter(p => p.category === selectedCategory);
+    if (selectedSubcategory !== "all") filtered = filtered.filter(p => p.subcategory === selectedSubcategory);
     if (searchTerm) {
       const s = searchTerm.toLowerCase();
       filtered = filtered.filter(p =>
         p.name?.toLowerCase().includes(s) ||
         p.description?.toLowerCase().includes(s) ||
+        p.category?.toLowerCase().includes(s) ||
         p.variants?.some(v => v.sku?.toLowerCase().includes(s))
       );
     }
+    return filtered;
+  }, [allProducts, selectedCategory, selectedSubcategory, searchTerm]);
+
+  const availableVoltages = useMemo(() =>
+    [...new Set(specFilterBase.map(p => p.voltageRange).filter(Boolean))].sort() as string[],
+    [specFilterBase]);
+  const availableAmperage = useMemo(() =>
+    [...new Set(specFilterBase.map(p => p.amperageRange).filter(Boolean))].sort() as string[],
+    [specFilterBase]);
+  const availableSubcategoriesForSearch = useMemo(() =>
+    [...new Set(specFilterBase.map(p => p.subcategory).filter(Boolean))].sort() as string[],
+    [specFilterBase]);
+
+  // Filter in memory whenever category or search changes — zero Supabase egress
+  useEffect(() => {
+    let filtered = specFilterBase;
+    if (filterVoltage) filtered = filtered.filter(p => p.voltageRange === filterVoltage);
+    if (filterAmperage) filtered = filtered.filter(p => p.amperageRange === filterAmperage);
+    // When showing all products with no filter/search, interleave 1 per category
+    // first so every category is represented up front instead of grouped by recency.
+    if (selectedCategory === "all" && selectedSubcategory === "all" && !searchTerm && !filterVoltage && !filterAmperage) {
+      const seen = new Set<string>();
+      const front: typeof filtered = [];
+      const rest: typeof filtered = [];
+      for (const p of filtered) {
+        const cat = p.category || "__none__";
+        if (!seen.has(cat)) { seen.add(cat); front.push(p); }
+        else rest.push(p);
+      }
+      filtered = [...front, ...rest];
+    }
     setProducts(filtered);
-  }, [allProducts, selectedCategory, searchTerm]);
+  }, [specFilterBase, filterVoltage, filterAmperage, selectedCategory, selectedSubcategory, searchTerm]);
+
+  useEffect(() => { setSelectedSubcategory("all"); setFilterVoltage(""); setFilterAmperage(""); }, [selectedCategory]);
+  useEffect(() => { setFilterVoltage(""); setFilterAmperage(""); }, [searchTerm]);
 
   // Track page_view once on mount (staff excluded)
   useEffect(() => {
@@ -609,6 +664,8 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setSearchTerm(searchInput);
+    // Clear category filter so search runs across all products, not just the active category
+    if (searchInput.trim()) setSelectedCategory("all");
     if (!isStaffViewer && searchInput.trim().length >= 2) {
       void trackStoreEvent({ workspaceId, sessionId: getOrCreateSessionId(), browserId: getBrowserId(), eventType: 'search', searchQuery: searchInput.trim() });
     }
@@ -682,9 +739,9 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
 
   const updateProductUrl = (productId: string | null) => {
     if (productId) {
-      navigate(`/store/product/${encodeURIComponent(productId)}`);
+      navigate(storeSlug ? `/store/${storeSlug}/product/${encodeURIComponent(productId)}` : `/store/product/${encodeURIComponent(productId)}`);
     } else {
-      navigate("/store");
+      navigate(storeSlug ? `/store/${storeSlug}` : "/store");
     }
   };
 
@@ -759,12 +816,45 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
     ? products.filter((p) => p.variants.some((v) => v.inStock))
     : products;
 
+  // Auto-trigger equivalents lookup when search returns zero results
+  // Must be after visibleProducts declaration to avoid TDZ error in dep array
+  useEffect(() => {
+    if (!searchTerm || visibleProducts.length > 0) {
+      setEquivalents([]);
+      setEquivalentsSearched("");
+      return;
+    }
+    if (equivalentsSearched === searchTerm) return;
+    setEquivalentsLoading(true);
+    setEquivalents([]);
+    setEquivalentsSearched(searchTerm);
+    supabase.functions.invoke("find-equivalents", { body: { partNumber: searchTerm } })
+      .then(({ data }) => {
+        const parts: string[] = data?.equivalents ?? [];
+        if (parts.length === 0) return;
+        const term = (p: string) => p.toLowerCase().replace(/[\s-]/g, "");
+        const found = allProducts.filter((prod) =>
+          parts.some((eq) => {
+            const e = term(eq);
+            return term(prod.name).includes(e) || (prod.sku && term(prod.sku).includes(e));
+          })
+        );
+        found.sort((a, b) => (b.stock ?? 0) - (a.stock ?? 0));
+        setEquivalents(found);
+      })
+      .catch(() => {})
+      .finally(() => setEquivalentsLoading(false));
+  }, [searchTerm, visibleProducts.length, allProducts, equivalentsSearched]);
+
   return (
     <div className={cn(
-      "min-h-screen bg-white text-gray-800",
+      "min-h-screen text-gray-800",
+      template.key === 'fashion' ? "bg-white" : "bg-white",
       template.font === "serif" ? "font-serif" : "font-sans",
       isWalkIn && "ring-4 ring-amber-400 ring-inset"
-    )}>
+    )}
+    style={template.key === 'fashion' ? { fontFamily: "'Jost', system-ui, sans-serif" } : undefined}
+    >
       {/* ── ADMIN PREVIEW BAR ───────────────────────────────────────────────── */}
       {isAdminPreview && (
         <div className="sticky top-0 z-50 bg-[#cc1818] text-white px-4 py-2 text-center text-sm font-semibold shadow-md flex items-center justify-center gap-4 flex-wrap">
@@ -796,11 +886,204 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
       )}
 
       {/* ── TOP HEADER ─────────────────────────────────────────────────────── */}
-      <header className="bg-gradient-to-r from-slate-950 via-blue-900 to-blue-700 text-white shadow-lg">
+
+      {/* ── FASHION HEADER — white editorial ── */}
+      {template.key === 'fashion' && (
+        <header className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm">
+          <div className="max-w-7xl mx-auto px-4 md:px-8">
+            <div className="h-16 md:h-20 flex items-center gap-4">
+              {/* Logo + Store Name */}
+              <a href="/" className="flex items-center gap-3 shrink-0 min-w-0">
+                {storeLogo && (
+                  <img src={storeLogo} alt={storeName} className="h-10 w-10 rounded-full object-contain ring-1 ring-gray-100 shrink-0" />
+                )}
+                <span className="text-lg md:text-xl font-bold tracking-tight text-gray-900 truncate" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+                  {storeName}
+                </span>
+              </a>
+
+              {/* Desktop category nav — middle */}
+              {categories.length > 0 && (
+                <nav className="hidden lg:flex items-center gap-7 mx-auto text-[11px] font-semibold uppercase tracking-[0.12em] text-gray-400">
+                  <button
+                    onClick={() => { setSelectedCategory("all"); setSearchTerm(""); setSearchInput(""); }}
+                    className={cn("py-1 border-b-2 transition-colors whitespace-nowrap", selectedCategory === "all" ? "border-gray-900 text-gray-900" : "border-transparent hover:text-gray-700 hover:border-gray-300")}
+                  >All</button>
+                  {categories.slice(0, 6).map(c => (
+                    <button key={c.id} onClick={() => setSelectedCategory(c.id)}
+                      className={cn("py-1 border-b-2 transition-colors whitespace-nowrap", selectedCategory === c.id ? "border-gray-900 text-gray-900" : "border-transparent hover:text-gray-700 hover:border-gray-300")}>
+                      {c.name}
+                    </button>
+                  ))}
+                </nav>
+              )}
+
+              {/* Right actions */}
+              <div className={cn("flex items-center gap-1", categories.length === 0 && "ml-auto")}>
+                <button onClick={() => setShowFashionSearch(v => !v)} className="p-2.5 rounded-full hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors" aria-label="Search">
+                  <Search className="h-5 w-5" />
+                </button>
+                {user ? (
+                  <>
+                    {(isSystemAdmin || workspace?.hasCrmAccess) && (
+                      <button onClick={() => navigate(isSystemAdmin ? "/admin" : "/crm")}
+                        className="hidden md:flex items-center gap-1.5 ml-1 px-3 py-1.5 text-[11px] font-bold uppercase tracking-widest text-white rounded"
+                        style={{ background: accent }}>
+                        <LayoutDashboard className="h-3.5 w-3.5" /> Dashboard
+                      </button>
+                    )}
+                    <button onClick={() => setShowAccount(true)} className="p-2.5 rounded-full hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors" aria-label="Account">
+                      <User className="h-5 w-5" />
+                    </button>
+                    <button onClick={() => logout()} className="hidden md:block p-2.5 rounded-full hover:bg-gray-50 text-gray-400 hover:text-gray-700 transition-colors" aria-label="Sign out">
+                      <LogOut className="h-4 w-4" />
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={() => setShowStoreLogin(true)} className="hidden md:flex items-center gap-1.5 p-2.5 text-[11px] font-semibold uppercase tracking-widest text-gray-500 hover:text-gray-900 transition-colors">
+                    <LogIn className="h-4 w-4" /> Sign In
+                  </button>
+                )}
+                <button onClick={() => setShowCart(true)} className="relative flex items-center gap-2 ml-1 px-3.5 py-2 text-sm font-bold text-white rounded-full transition-opacity hover:opacity-90" style={{ background: accent }}>
+                  <ShoppingBag className="h-4 w-4" />
+                  <span className="hidden sm:inline">{itemCount > 0 ? `R${subtotal.toFixed(2)}` : "Bag"}</span>
+                  {itemCount > 0 && (
+                    <span className="flex items-center justify-center h-4 w-4 rounded-full bg-white text-[10px] font-bold" style={{ color: accent }}>{itemCount}</span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Expandable search */}
+            {showFashionSearch && (
+              <div className="border-t border-gray-100 py-3">
+                <form onSubmit={(e) => { handleSearch(e); setShowFashionSearch(false); }} className="relative max-w-xl mx-auto">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+                  <Input autoFocus type="text" placeholder="Search products, styles, SKUs…" value={searchInput}
+                    onChange={(e) => { setSearchInput(e.target.value); if (e.target.value === "") setSearchTerm(""); }}
+                    className="w-full pl-10 pr-10 h-11 border-gray-200 bg-gray-50 text-gray-800 rounded-lg focus-visible:ring-1 focus-visible:ring-gray-900" />
+                  {searchInput && (
+                    <button type="button" onClick={() => { setSearchInput(""); setSearchTerm(""); setShowFashionSearch(false); }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-700">
+                      <X className="h-4 w-4" />
+                    </button>
+                  )}
+                </form>
+              </div>
+            )}
+          </div>
+        </header>
+      )}
+
+      {/* ── TECH STORE HEADER — white + blue nav bar ── */}
+      {template.key === 'techstore' && (
+        <header className="sticky top-0 z-40 shadow-md">
+          {/* Utility bar */}
+          <div className="bg-gray-100 border-b border-gray-200">
+            <div className="max-w-7xl mx-auto px-4 flex items-center justify-between py-1 text-xs text-gray-600">
+              <a href={`tel:${storePhoneTel}`} className="inline-flex items-center gap-1 hover:text-blue-700">
+                <Phone className="h-3 w-3" />{storePhone}
+              </a>
+              <div className="flex items-center gap-4">
+                {user ? (
+                  <>
+                    <button onClick={() => setShowAccount(true)} className="hover:text-blue-700 flex items-center gap-1"><User className="h-3 w-3" />My Account</button>
+                    {(isSystemAdmin || workspace?.hasCrmAccess) && (
+                      <button onClick={() => navigate(isSystemAdmin ? "/admin" : "/crm")} className="hover:text-blue-700 flex items-center gap-1"><LayoutDashboard className="h-3 w-3" />Dashboard</button>
+                    )}
+                    <button onClick={() => logout()} className="hover:text-red-600 flex items-center gap-1"><LogOut className="h-3 w-3" />Sign Out</button>
+                  </>
+                ) : (
+                  <button onClick={() => setShowStoreLogin(true)} className="hover:text-blue-700 flex items-center gap-1"><LogIn className="h-3 w-3" />Sign In / My Account</button>
+                )}
+                <button onClick={() => setShowCart(true)} className="hover:text-blue-700 flex items-center gap-1"><ShoppingCart className="h-3 w-3" />Shopping Cart ({itemCount})</button>
+              </div>
+            </div>
+          </div>
+          {/* Main header: logo + search + cart */}
+          <div className="bg-white border-b border-gray-200">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex items-center gap-3 md:gap-6">
+              {/* Logo + store name */}
+              <a href="/" className="flex items-center gap-3 shrink-0 min-w-0">
+                <div className="h-12 w-12 md:h-16 md:w-16 rounded overflow-hidden bg-white border border-gray-100 flex-shrink-0">
+                  <img src={storeLogo} alt={storeName} className="h-full w-full object-contain" />
+                </div>
+                <div className="hidden sm:block min-w-0">
+                  <div className="font-black text-lg md:text-2xl leading-tight text-gray-900 tracking-tight">{storeName}</div>
+                  {ecomSettings.storeTagline && <div className="text-xs text-gray-500 truncate">{ecomSettings.storeTagline}</div>}
+                </div>
+              </a>
+              {/* Search bar */}
+              <form onSubmit={handleSearch} className="flex-1">
+                <div className="relative w-full">
+                  <Input
+                    type="text"
+                    placeholder="Search products, parts, SKUs…"
+                    value={searchInput}
+                    onChange={(e) => { setSearchInput(e.target.value); if (e.target.value === "") setSearchTerm(""); }}
+                    className="w-full pl-4 pr-12 h-11 md:h-12 text-sm md:text-base border-gray-300 rounded focus-visible:ring-2 focus-visible:ring-blue-500"
+                  />
+                  <button type="submit" className="absolute right-0 top-0 h-full px-4 bg-gray-700 hover:bg-gray-800 text-white rounded-r flex items-center" aria-label="Search">
+                    <Search className="h-5 w-5" />
+                  </button>
+                </div>
+              </form>
+              {/* Cart button */}
+              <button
+                onClick={() => setShowCart(true)}
+                className="shrink-0 flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white text-sm font-semibold px-3 md:px-4 h-11 md:h-12 rounded transition-colors"
+              >
+                <ShoppingCart className="h-5 w-5" />
+                <span className="hidden md:inline">{itemCount} item{itemCount !== 1 ? "s" : ""} — R{subtotal.toFixed(2)}</span>
+                {itemCount > 0 && <span className="md:hidden inline-flex items-center justify-center w-5 h-5 rounded-full bg-white text-gray-900 text-xs font-bold">{itemCount}</span>}
+              </button>
+            </div>
+          </div>
+          {/* Blue nav bar with stock filter + categories */}
+          <div style={{ background: accent }}>
+            <div className="max-w-7xl mx-auto px-4 flex items-center gap-0 overflow-x-auto">
+              <button
+                onClick={() => { setSelectedCategory("all"); setSearchTerm(""); setSearchInput(""); }}
+                className="flex items-center gap-1.5 text-white font-semibold text-sm px-4 py-3 whitespace-nowrap hover:bg-white/10 transition-colors border-r border-white/20"
+              >
+                <Package className="h-4 w-4" /> Shop
+              </button>
+              {categories.slice(0, 8).map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => setSelectedCategory(c.id)}
+                  className={cn(
+                    "text-sm px-3 md:px-4 py-3 whitespace-nowrap transition-colors border-r border-white/20",
+                    selectedCategory === c.id
+                      ? "bg-white text-blue-800 font-bold"
+                      : "text-white/90 hover:bg-white/10 font-medium"
+                  )}
+                >
+                  {c.name}
+                </button>
+              ))}
+              <div className="ml-auto flex items-center gap-4 px-4 text-xs text-white/80 shrink-0">
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="ts_stock" checked={!inStockOnly} onChange={() => setInStockOnly(false)} className="accent-white" />
+                  All products
+                </label>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="radio" name="ts_stock" checked={inStockOnly} onChange={() => setInStockOnly(true)} className="accent-white" />
+                  In stock only
+                </label>
+              </div>
+            </div>
+          </div>
+        </header>
+      )}
+
+      {/* ── STANDARD HEADER — dark gradient (non-fashion templates) ── */}
+      {template.key !== 'fashion' && template.key !== 'techstore' && (
+      <header className="sticky top-0 z-40 bg-gradient-to-r from-slate-950 via-blue-900 to-blue-700 text-white shadow-lg">
         {/* Row 1: Logo + Search + Cart */}
-        <div className="max-w-7xl mx-auto px-4 py-4 md:py-5 flex flex-col lg:flex-row lg:items-center gap-4">
-          <a href="/" className="flex items-center gap-4 shrink-0 min-w-0">
-            <div className="h-16 w-16 md:h-20 md:w-20 rounded-full bg-white p-1.5 shadow-lg ring-2 ring-white/20 overflow-hidden">
+        <div className="max-w-7xl mx-auto px-4 py-3 md:py-5 flex flex-row items-center gap-3 lg:gap-4">
+          <a href="/" className="flex items-center gap-2 sm:gap-4 shrink-0 min-w-0">
+            <div className="h-10 w-10 sm:h-16 sm:w-16 md:h-20 md:w-20 rounded-full bg-white p-1 sm:p-1.5 shadow-lg ring-2 ring-white/20 overflow-hidden flex-shrink-0">
               <img
                 src={storeLogo}
                 alt={`${storeName} logo`}
@@ -808,15 +1091,15 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
               />
             </div>
             <div className="min-w-0 leading-tight">
-              <div className="font-black text-xl md:text-2xl leading-tight tracking-tight">
+              <div className="font-black text-sm sm:text-xl md:text-2xl leading-tight tracking-tight">
                 {storeName}
               </div>
               {(ecomSettings.storeTagline || storeAddress) && (
-                <div className="text-xs md:text-sm text-blue-100 tracking-wide uppercase">
+                <div className="hidden sm:block text-xs md:text-sm text-blue-100 tracking-wide uppercase">
                   {ecomSettings.storeTagline ? ecomSettings.storeTagline : storeAddress}
                 </div>
               )}
-              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs md:text-sm text-blue-100">
+              <div className="hidden sm:flex mt-1 flex-wrap items-center gap-x-3 gap-y-1 text-xs md:text-sm text-blue-100">
                 <a href={`tel:${storePhoneTel}`} className="inline-flex items-center gap-1.5 hover:text-orange-300">
                   <Phone className="h-3.5 w-3.5" />
                   {storePhone}
@@ -858,7 +1141,7 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
             onClick={() => {
               setShowCart(true);
             }}
-            className="relative shrink-0 flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm md:text-base font-bold px-4 h-12 rounded-lg shadow-md transition-colors"
+            className="relative shrink-0 ml-auto lg:ml-0 flex items-center justify-center gap-2 bg-orange-500 hover:bg-orange-600 text-white text-sm md:text-base font-bold px-3 sm:px-4 h-10 sm:h-12 rounded-lg shadow-md transition-colors"
           >
             <ShoppingCart className="h-5 w-5" />
             <span className="hidden sm:inline">
@@ -912,69 +1195,124 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
                 <span className="text-blue-50">Only show in stock products</span>
               </label>
             </div>
-            <nav className="flex items-center gap-5 text-sm font-medium">
+            <nav className="flex items-center gap-4 text-sm font-medium">
               <button
                 onClick={() => { setSelectedCategory("all"); setSearchTerm(""); setSearchInput(""); }}
-                className="text-white hover:text-orange-400 flex items-center gap-1 transition-colors"
+                className="text-white hover:text-orange-400 flex items-center gap-1 transition-colors py-2"
               >
                 <Package className="h-3.5 w-3.5" /> Shop
               </button>
-              <a href="#services" className="text-blue-50 hover:text-orange-400 flex items-center gap-1 transition-colors">
+              <a href="#services" className="text-blue-50 hover:text-orange-400 flex items-center gap-1 transition-colors py-2">
                 <Wrench className="h-3.5 w-3.5" /> Services
               </a>
-              <a href="#contact" className="text-blue-50 hover:text-orange-400 flex items-center gap-1 transition-colors">
+              <a href="#contact" className="text-blue-50 hover:text-orange-400 flex items-center gap-1 transition-colors py-2">
                 <Info className="h-3.5 w-3.5" /> Contact
               </a>
               <a href={`https://wa.me/${(ecomSettings as any).storeWhatsApp || '27746511031'}`} target="_blank" rel="noopener noreferrer"
-                className="text-green-400 hover:text-green-300 flex items-center gap-1 transition-colors">
+                className="text-green-400 hover:text-green-300 flex items-center gap-1 transition-colors py-2">
                 <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
               </a>
             </nav>
           </div>
         </div>
       </header>
+      )}
 
       {/* ── HERO SLIDER (template-driven) ──────────────────────────────────── */}
       {template.hero && !searchTerm && selectedCategory === "all" && (
-        <HeroSlider slides={heroSlides} storeName={storeName} tagline={ecomSettings.storeTagline} accent={accent} height={ecomSettings.heroHeight} />
+        <HeroSlider slides={heroSlides} storeName={storeName} tagline={ecomSettings.storeTagline} accent={accent} height={ecomSettings.heroHeight} forceSlideIdx={previewSlideIdx} paused={previewPaused} />
       )}
 
-      {/* ── CATEGORY PILLS ─────────────────────────────────────────────────── */}
-      {categories.length > 0 && (
+      {/* ── CATEGORY FILTER ────────────────────────────────────────────────── */}
+      {categories.length > 0 && template.key !== 'fashion' && template.key !== 'techstore' && (
         <CategoryPills
           categories={categories}
           selected={selectedCategory}
           onSelect={setSelectedCategory}
         />
       )}
+      {template.key === 'fashion' && (
+        <FashionFilterBar
+          categories={categories}
+          selected={selectedCategory}
+          onSelect={setSelectedCategory}
+          inStockOnly={inStockOnly}
+          onStockToggle={setInStockOnly}
+          accent={accent}
+        />
+      )}
+
+      {/* ── SUBCATEGORY PILLS ──────────────────────────────────────────────── */}
+      {selectedCategory !== "all" && (() => {
+        const activeCat = categories.find(c => c.id === selectedCategory);
+        if (!activeCat?.subcategories?.length) return null;
+        return (
+          <div className="bg-white border-b border-gray-100">
+            <div className="max-w-7xl mx-auto px-4 py-2 flex items-center gap-2 flex-wrap">
+              <button
+                onClick={() => setSelectedSubcategory("all")}
+                className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors whitespace-nowrap ${
+                  selectedSubcategory === "all"
+                    ? "bg-orange-500 text-white border-orange-500"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-orange-300 hover:text-orange-500"
+                }`}
+              >All</button>
+              {activeCat.subcategories.map(sub => (
+                <button
+                  key={sub.id}
+                  onClick={() => setSelectedSubcategory(sub.name)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium border transition-colors whitespace-nowrap ${
+                    selectedSubcategory === sub.name
+                      ? "bg-orange-500 text-white border-orange-500"
+                      : "bg-white text-gray-600 border-gray-200 hover:border-orange-300 hover:text-orange-500"
+                  }`}
+                >
+                  {sub.name}
+                  <span className="ml-1 opacity-60">({sub.productCount})</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── LATEST CAROUSEL ────────────────────────────────────────────────── */}
       {template.carousel && !searchTerm && selectedCategory === "all" && (
-        <section className="max-w-7xl mx-auto px-4 pt-8 pb-4">
+        <section className={cn("px-4 pb-4", template.key === 'techstore' ? "max-w-7xl mx-auto pt-6" : "max-w-7xl mx-auto pt-8")}>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-800">Latest</h2>
+            <h2 className={cn("text-xl font-bold", template.key === 'techstore' ? "text-blue-700" : "text-gray-800")}>Latest</h2>
             <div className="flex gap-2">
-              <button onClick={() => scrollCarousel("left")}
-                className="w-8 h-8 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-50">
-                <ChevronLeft className="h-4 w-4" />
-              </button>
+              {template.key !== 'techstore' && (
+                <button onClick={() => scrollCarousel("left")}
+                  className="w-8 h-8 rounded border border-gray-200 flex items-center justify-center hover:bg-gray-50">
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+              )}
               <button onClick={() => scrollCarousel("right")}
-                className="w-8 h-8 rounded bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700">
-                <ChevronRight className="h-4 w-4" />
+                className={cn("flex items-center gap-1.5 rounded font-semibold transition-colors",
+                  template.key === 'techstore'
+                    ? "bg-teal-500 hover:bg-teal-600 text-white px-4 py-1.5 text-sm"
+                    : "w-8 h-8 bg-blue-600 text-white justify-center hover:bg-blue-700"
+                )}>
+                {template.key === 'techstore' ? <>Next <ChevronRight className="h-4 w-4" /></> : <ChevronRight className="h-4 w-4" />}
               </button>
             </div>
           </div>
           {loading ? (
             <div className="flex gap-4">
               {[...Array(5)].map((_, i) => (
-                <div key={i} className="w-44 shrink-0 bg-gray-100 animate-pulse rounded-lg h-64" />
+                <div key={i} className={cn("shrink-0 bg-gray-100 animate-pulse rounded-lg", template.key === 'techstore' ? "w-52 h-72" : "w-44 h-64")} />
               ))}
             </div>
           ) : (
-            <div ref={carouselRef} className="flex gap-4 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
+            <div ref={carouselRef} className="flex items-start gap-4 overflow-x-auto pb-2" style={{ scrollSnapType: "x mandatory" }}>
               {visibleProducts.map((product) => (
-                <div key={product.id} style={{ scrollSnapAlign: "start" }} className="shrink-0 w-44">
+                <div key={product.id} style={{ scrollSnapAlign: "start" }} className={cn("shrink-0", template.key === 'techstore' ? "w-52" : "w-44")}>
+                  {template.key === 'techstore' ? (
+                    <TechProductCard product={product} onAddToCart={addToCart} onViewDetails={openProduct} accent={accent} />
+                  ) : (
                     <MiniProductCard product={product} onAddToCart={addToCart} onViewDetails={openProduct} showBrand={(ecomSettings as any).showBrand ?? false} />
+                  )}
                 </div>
               ))}
             </div>
@@ -983,16 +1321,78 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
       )}
 
       {/* ── MAIN PRODUCT GRID ──────────────────────────────────────────────── */}
-      <section id="store-products" className="max-w-7xl mx-auto px-4 py-6">
+      <section id="store-products" className={cn("max-w-7xl mx-auto px-4 py-6", template.key === 'fashion' && "md:px-8 py-8")}>
+
+        {/* Fashion: editorial section header */}
+        {template.key === 'fashion' && !searchTerm && selectedCategory === "all" && (
+          <div className="text-center mb-10">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-gray-400 mb-2">The Collection</p>
+            <h2 className="text-3xl md:text-4xl font-light text-gray-900 tracking-tight" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif" }}>
+              {ecomSettings.storeTagline || "New Season"}
+            </h2>
+            <div className="mt-3 flex items-center justify-center gap-4">
+              <div className="h-px flex-1 max-w-[80px] bg-gray-200" />
+              <div className="h-1 w-1 rounded-full bg-gray-400" />
+              <div className="h-px flex-1 max-w-[80px] bg-gray-200" />
+            </div>
+          </div>
+        )}
+
         {(searchTerm || selectedCategory !== "all") && (
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-700">
+          <div className="flex items-center justify-between mb-3 md:mb-4">
+            <h2 className={cn("font-semibold text-gray-900", template.key === 'fashion' ? "text-xl tracking-tight" : "text-lg text-gray-700")}
+              style={template.key === 'fashion' ? { fontFamily: "'Cormorant Garamond', Georgia, serif" } : undefined}>
               {searchTerm ? `Results for "${searchTerm}"` : categories.find((c) => c.id === selectedCategory)?.name || "Products"}
             </h2>
-            <button onClick={() => { setSelectedCategory("all"); setSearchTerm(""); setSearchInput(""); }}
-              className="text-sm text-orange-500 hover:underline flex items-center gap-1">
-              <X className="h-3 w-3" /> Clear filters
+            <button onClick={() => { setSelectedCategory("all"); setSearchTerm(""); setSearchInput(""); setFilterVoltage(""); setFilterAmperage(""); }}
+              className={cn("text-sm flex items-center gap-1", template.key === 'fashion' ? "text-gray-500 hover:text-gray-900 text-xs uppercase tracking-widest" : "text-orange-500 hover:underline")}>
+              <X className="h-3 w-3" /> Clear
             </button>
+          </div>
+        )}
+
+        {/* Spec filters — voltage / amperage / subcategory narrowing */}
+        {(searchTerm || selectedCategory !== "all") && (availableVoltages.length > 1 || availableAmperage.length > 1 || (searchTerm && availableSubcategoriesForSearch.length > 1)) && (
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            <SlidersHorizontal className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+            {searchTerm && availableSubcategoriesForSearch.length > 1 && (
+              <select
+                value={selectedSubcategory}
+                onChange={(e) => setSelectedSubcategory(e.target.value)}
+                className="py-1.5 px-3 border border-gray-200 rounded-full text-xs bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-orange-300 cursor-pointer"
+              >
+                <option value="all">All Types</option>
+                {availableSubcategoriesForSearch.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+            {availableVoltages.length > 1 && (
+              <select
+                value={filterVoltage}
+                onChange={(e) => setFilterVoltage(e.target.value)}
+                className="py-1.5 px-3 border border-gray-200 rounded-full text-xs bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-orange-300 cursor-pointer"
+              >
+                <option value="">All Voltages</option>
+                {availableVoltages.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            )}
+            {availableAmperage.length > 1 && (
+              <select
+                value={filterAmperage}
+                onChange={(e) => setFilterAmperage(e.target.value)}
+                className="py-1.5 px-3 border border-gray-200 rounded-full text-xs bg-white text-gray-700 focus:outline-none focus:ring-1 focus:ring-orange-300 cursor-pointer"
+              >
+                <option value="">All Amperages</option>
+                {availableAmperage.map(a => <option key={a} value={a}>{a}</option>)}
+              </select>
+            )}
+            {(filterVoltage || filterAmperage || (searchTerm && selectedSubcategory !== "all")) && (
+              <button
+                onClick={() => { setFilterVoltage(""); setFilterAmperage(""); if (searchTerm) setSelectedSubcategory("all"); }}
+                className="text-xs text-orange-500 hover:text-orange-700 flex items-center gap-1 transition-colors"
+              >
+                <X className="h-3 w-3" /> Clear filters
+              </button>
+            )}
           </div>
         )}
         {loading ? (
@@ -1002,15 +1402,69 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
             ))}
           </div>
         ) : visibleProducts.length === 0 ? (
-          <div className="py-20 text-center">
+          <div className="py-12 text-center">
             <ShoppingBag className="h-12 w-12 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 font-medium">No products found</p>
-            <p className="text-gray-400 text-sm mt-1">
-              {searchTerm ? "Try a different search term" : inStockOnly ? "No products currently in stock" : "Check back soon — we're adding stock"}
+            <p className="text-gray-700 font-semibold text-lg">
+              {searchTerm ? `We don't stock "${searchTerm}"` : "No products found"}
             </p>
+            <p className="text-gray-400 text-sm mt-1">
+              {searchTerm ? "Searching for equivalents we carry…" : inStockOnly ? "No products currently in stock" : "Check back soon — we're adding stock"}
+            </p>
+
+            {/* Equivalents panel */}
+            {searchTerm && (
+              <div className="mt-8 max-w-2xl mx-auto text-left">
+                {equivalentsLoading && (
+                  <div className="flex items-center gap-2 justify-center text-sm text-gray-400 py-6">
+                    <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                    </svg>
+                    Looking for compatible alternatives…
+                  </div>
+                )}
+
+                {!equivalentsLoading && equivalents.length > 0 && (
+                  <div>
+                    <p className="text-sm font-bold text-gray-700 mb-3 text-center">
+                      We don't have <span className="font-mono text-orange-600">{searchTerm.toUpperCase()}</span> but we carry these compatible alternatives:
+                    </p>
+                    <div className={cn("grid gap-4", template.gridCols)}>
+                      {equivalents.map((product, i) => (
+                        <div key={product.id} className="relative">
+                          {product.stock === 0 && (
+                            <span className="absolute top-2 left-2 z-10 text-[10px] bg-red-100 text-red-600 font-bold px-1.5 py-0.5 rounded uppercase">Out of stock</span>
+                          )}
+                          <ProductCard
+                            product={product}
+                            index={i}
+                            variant={template.card}
+                            accent={accent}
+                            onAddToCart={addToCart}
+                            onViewDetails={openProduct}
+                            showBrand={(ecomSettings as any).showBrand ?? false}
+                            showSku={(ecomSettings as any).showSku ?? true}
+                            showQuantity={(ecomSettings as any).showQuantity ?? true}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {!equivalentsLoading && equivalents.length === 0 && equivalentsSearched === searchTerm && (
+                  <p className="text-sm text-gray-400 text-center py-4">
+                    No compatible alternatives found in our current stock. <br/>
+                    <a href={`https://wa.me/27746511031?text=Hi%2C%20do%20you%20have%20${encodeURIComponent(searchTerm)}%20or%20an%20equivalent%3F`} target="_blank" rel="noopener noreferrer" className="text-green-600 font-semibold hover:underline">
+                      Ask us on WhatsApp →
+                    </a>
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         ) : (
-          <div className={cn("grid gap-4", template.gridCols)}>
+          <div className={cn("grid", template.key === 'fashion' ? "gap-x-4 gap-y-10 md:gap-x-6 md:gap-y-12" : "gap-4", template.gridCols)}>
             {visibleProducts.map((product, i) => (
               <ProductCard key={product.id} product={product} index={i} variant={template.card} accent={accent} onAddToCart={addToCart} onViewDetails={openProduct} showBrand={(ecomSettings as any).showBrand ?? false} showSku={(ecomSettings as any).showSku ?? true} showQuantity={(ecomSettings as any).showQuantity ?? true} />
             ))}
@@ -1025,6 +1479,10 @@ export function PublicStore({ workspaceId, previewSettings }: { workspaceId: str
           onClose={closeProduct}
           showSupplier={(ecomSettings as any).showBrand ?? false}
           ecommerceSettings={ecomSettings}
+          allProducts={allProducts}
+          enableSimilarParts={(ecomSettings as any).enableSimilarParts ?? false}
+          similarPartsThreshold={(ecomSettings as any).similarPartsThreshold ?? 30}
+          onViewProduct={setSelectedProduct}
         />
       )}
       {showCart && (
@@ -1511,6 +1969,80 @@ function StatusPill({ label }: { label: string }) {
   );
 }
 
+// ─── Tech Product Card (techstore carousel) ──────────────────────────────────
+function TechProductCard({
+  product,
+  onAddToCart,
+  onViewDetails,
+  accent = "#1d4ed8",
+}: {
+  product: PublicProduct;
+  onAddToCart: (p: PublicProduct, variantId: string, qty: number) => void;
+  onViewDetails: (p: PublicProduct) => void;
+  accent?: string;
+}) {
+  const v = product.variants[0];
+  const imageUrl = product.images?.[0]?.url;
+  const hasVariants = product.variants.length > 1;
+  const anyInStock = product.variants.some(v => v.inStock);
+
+  return (
+    <div
+      className="bg-white border border-gray-200 rounded overflow-hidden hover:shadow-md hover:border-blue-200 transition-all cursor-pointer group flex flex-col"
+      onClick={() => onViewDetails(product)}
+    >
+      {/* Product name */}
+      <div className="px-3 pt-3 pb-1">
+        <p className="text-xs font-bold text-gray-900 uppercase leading-tight tracking-tight line-clamp-2">
+          {product.name}
+        </p>
+        {product.brand && (
+          <p className="text-[10px] font-semibold mt-0.5" style={{ color: accent }}>{product.brand}</p>
+        )}
+        {(product.voltageRange || product.amperageRange) && (
+          <p className="text-[10px] text-gray-500 font-medium mt-0.5">
+            {[product.voltageRange, product.amperageRange].filter(Boolean).join(" · ")}
+          </p>
+        )}
+      </div>
+      {/* Image */}
+      <div className="relative mx-3 mb-2 h-36 bg-gray-50 border border-gray-100 rounded overflow-hidden flex-shrink-0">
+        {imageUrl ? (
+          <img src={imageUrl} alt={product.name} className={`w-full h-full object-contain p-2 group-hover:scale-105 transition-transform ${!anyInStock ? "opacity-60" : ""}`} />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center">
+            <Package className="h-10 w-10 text-gray-200" />
+          </div>
+        )}
+        {!anyInStock && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="bg-red-600 text-white text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded shadow">Sold Out</span>
+          </div>
+        )}
+      </div>
+      {/* Price + CTA */}
+      <div className="px-3 pb-3 pt-1 border-t border-gray-100 flex items-center justify-between gap-2">
+        {v && (
+          <div>
+            <span className="text-sm font-bold text-gray-900">R{v.price.toFixed(2)}</span>
+            {v.compareAtPrice && (
+              <span className="ml-1.5 text-[10px] text-gray-400 line-through">R{v.compareAtPrice.toFixed(2)}</span>
+            )}
+          </div>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); hasVariants ? onViewDetails(product) : v && onAddToCart(product, v.id, 1); }}
+          disabled={!anyInStock || !v}
+          className="text-[10px] font-bold px-2.5 py-1.5 rounded text-white transition-colors disabled:bg-gray-200 disabled:text-gray-400"
+          style={anyInStock && v ? { backgroundColor: accent } : undefined}
+        >
+          {anyInStock ? (hasVariants ? "Options" : "Add") : "Out"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Mini Card (carousel) ─────────────────────────────────────────────────────
 function MiniProductCard({
   product,
@@ -1547,7 +2079,12 @@ function MiniProductCard({
       <div className="p-2">
         <p className="text-xs font-semibold text-gray-800 leading-tight line-clamp-2 uppercase tracking-tight mb-1">{product.name}</p>
         {showBrand && product.brand && <p className="text-[10px] text-blue-700 font-medium mb-1">{product.brand}</p>}
-        <StockPill inStock={v?.inStock ?? false} />
+        {(product.voltageRange || product.amperageRange) && (
+          <p className="text-[10px] text-gray-500 font-medium mb-1">
+            {[product.voltageRange, product.amperageRange].filter(Boolean).join(" · ")}
+          </p>
+        )}
+        <StockPill inStock={v?.inStock ?? false} onOrder={product.status === 'on_order'} />
         {v && (
           <p className="text-sm font-bold text-gray-900 mt-1 flex items-baseline gap-1.5">
             <span>R{v.price.toFixed(2)}</span>
@@ -1562,13 +2099,14 @@ function MiniProductCard({
         {v && (() => {
           const hasVariants = product.variants.length > 1;
           const anyInStock = product.variants.some(v => v.inStock);
+          const isOnOrder = product.status === 'on_order';
           return (
             <button
               onClick={(e) => { e.stopPropagation(); hasVariants ? onViewDetails(product) : onAddToCart(product, v.id, 1); }}
               disabled={!anyInStock}
               className="mt-2 w-full text-[10px] font-semibold py-1 rounded transition-colors disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed bg-orange-500 hover:bg-orange-600 text-white"
             >
-              {anyInStock ? (hasVariants ? "Select Options" : "Add to Cart") : "Out of Stock"}
+              {anyInStock ? (hasVariants ? "Select Options" : isOnOrder ? "Order Now" : "Add to Cart") : "Out of Stock"}
             </button>
           );
         })()}
@@ -1603,6 +2141,16 @@ function ProductCard({
   const imageUrl = product.images?.[0]?.url;
   const hasVariants = product.variants.length > 1;
   const inStock = product.variants.some(v => v.inStock);
+
+  // Fashion template gets its own card with portrait images and hover-swap.
+  if (variant === "fashion") {
+    return (
+      <FashionProductCard
+        product={product} index={index} accent={accent}
+        onAddToCart={onAddToCart} onViewDetails={onViewDetails}
+      />
+    );
+  }
 
   // Non-classic templates use a flat (no-flip) card themed by accent + variant.
   if (variant !== "flip") {
@@ -1643,6 +2191,11 @@ function ProductCard({
             )}
             <p className="text-xs font-bold text-gray-800 uppercase leading-tight line-clamp-2 mt-0.5">{product.name}</p>
             {showSku && v?.sku && <p className="text-[10px] text-gray-400 mt-0.5">Part No: {v.sku}</p>}
+            {(product.voltageRange || product.amperageRange) && (
+              <p className="text-[10px] text-gray-500 font-medium mt-0.5">
+                {[product.voltageRange, product.amperageRange].filter(Boolean).join(" · ")}
+              </p>
+            )}
             {showQuantity && product.quantityInStock !== undefined && (
               <p className="text-[10px] text-gray-500 mt-0.5">In stock: {product.quantityInStock}</p>
             )}
@@ -1658,9 +2211,23 @@ function ProductCard({
                   )}
                 </p>
               )}
-              <StockPill inStock={inStock} />
+              <StockPill inStock={inStock} onOrder={product.status === 'on_order'} />
             </div>
-            <p className="text-[10px] text-gray-600 mt-0.5 text-right">Hover to see details ↺</p>
+            <div className="flex gap-1.5 mt-2">
+              <button
+                onClick={(e) => { e.stopPropagation(); hasVariants ? onViewDetails(product) : (v && onAddToCart(product, v.id, 1)); }}
+                disabled={!inStock}
+                className="flex-1 text-[10px] font-semibold py-1.5 rounded bg-orange-500 hover:bg-orange-600 text-white disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed transition-colors"
+              >
+                {inStock ? (hasVariants ? "Options" : product.status === 'on_order' ? "Order" : "Add to Cart") : "Out of Stock"}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onViewDetails(product); }}
+                className="px-2 text-[10px] font-semibold py-1.5 rounded border border-gray-200 text-gray-500 hover:border-orange-300 hover:text-orange-500 transition-colors"
+              >
+                Details
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1695,7 +2262,7 @@ function ProductCard({
                 inStock ? "bg-orange-500 hover:bg-orange-600 text-white" : "bg-gray-600 text-gray-400 cursor-not-allowed"
               }`}
             >
-              {inStock ? (hasVariants ? "Select Options" : "+ Add to Cart") : "Out of Stock"}
+              {inStock ? (hasVariants ? "Select Options" : product.status === 'on_order' ? "+ Order Now" : "+ Add to Cart") : "Out of Stock"}
             </button>
             <button
               onClick={() => onViewDetails(product)}
@@ -1779,6 +2346,11 @@ function FlatProductCard({
           {product.name}
         </p>
         {showSku && v?.sku && !compact && <p className={cn("text-[10px] mt-0.5", dark ? "text-slate-400" : "text-gray-400")}>Part No: {v.sku}</p>}
+        {(product.voltageRange || product.amperageRange) && (
+          <p className={cn("text-[10px] font-medium mt-0.5", dark ? "text-slate-400" : "text-gray-500")}>
+            {[product.voltageRange, product.amperageRange].filter(Boolean).join(" · ")}
+          </p>
+        )}
         {showQuantity && product.quantityInStock !== undefined && !compact && (
           <p className={cn("text-[10px] mt-0.5", dark ? "text-slate-400" : "text-gray-500")}>In stock: {product.quantityInStock}</p>
         )}
@@ -1798,7 +2370,7 @@ function FlatProductCard({
             )}
             style={{ background: inStock ? accent : "#9ca3af" }}
           >
-            {compact ? "+" : inStock ? (hasVariants ? "Select Options" : "Add to Cart") : "Sold Out"}
+            {compact ? "+" : inStock ? (hasVariants ? "Select Options" : product.status === 'on_order' ? "Order Now" : "Add to Cart") : "Sold Out"}
           </button>
         </div>
       </div>
@@ -1806,22 +2378,171 @@ function FlatProductCard({
   );
 }
 
-// ─── Hero Slider (showcase / boutique / bold templates) ───────────────────────
+// ─── Fashion Product Card (portrait image, hover-swap, quick-add) ─────────────
+function FashionProductCard({
+  product, onAddToCart, onViewDetails, index = 0, accent,
+}: {
+  product: PublicProduct;
+  onAddToCart: (p: PublicProduct, variantId: string, qty: number) => void;
+  onViewDetails: (p: PublicProduct) => void;
+  index?: number;
+  accent: string;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [wishlisted, setWishlisted] = useState(false);
+  const v = product.variants[0];
+  const imageUrl = product.images?.[0]?.url;
+  const secondImageUrl = product.images?.[1]?.url;
+  const hasVariants = product.variants.length > 1;
+  const inStock = product.variants.some(va => va.inStock);
+  const isOnSale = !!(v?.compareAtPrice && inStock);
+
+  const colorValues = product.variants
+    .flatMap(va => (va.attributes ?? []).filter(a => a.name.toLowerCase() === "color").map(a => a.value))
+    .filter((c, i, arr) => c && arr.indexOf(c) === i);
+
+  const displayImage = hovered && secondImageUrl ? secondImageUrl : imageUrl;
+
+  return (
+    <div
+      className="card-enter group cursor-pointer"
+      style={{ animationDelay: `${Math.min(index * 40, 500)}ms` }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onClick={() => onViewDetails(product)}
+    >
+      {/* Portrait image — 3:4 ratio */}
+      <div className="relative overflow-hidden aspect-[3/4] bg-[#f5f4f2]">
+        {imageUrl ? (
+          <img
+            src={displayImage ?? imageUrl}
+            alt={product.name}
+            className={cn(
+              "w-full h-full object-cover transition-all duration-700",
+              !inStock && "opacity-50 saturate-50",
+              hovered && secondImageUrl ? "scale-100" : "group-hover:scale-[1.03]",
+            )}
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center bg-[#f5f4f2]">
+            <Package className="h-12 w-12 text-gray-300" />
+          </div>
+        )}
+
+        {/* Sale badge */}
+        {isOnSale && (
+          <span className="absolute top-3 left-3 text-[9px] font-bold uppercase tracking-[0.15em] px-2 py-1 bg-black text-white">
+            Sale
+          </span>
+        )}
+
+        {/* Sold out overlay */}
+        {!inStock && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/30">
+            <span className="bg-white text-gray-800 text-[10px] font-bold uppercase tracking-[0.15em] px-5 py-2 shadow-sm">
+              Sold Out
+            </span>
+          </div>
+        )}
+
+        {/* Wishlist button */}
+        <button
+          onClick={(e) => { e.stopPropagation(); setWishlisted(v => !v); }}
+          className={cn(
+            "absolute top-3 right-3 p-2 rounded-full bg-white shadow-sm transition-all duration-300 opacity-100 scale-100",
+            !hovered && "md:opacity-0 md:scale-90",
+          )}
+          aria-label="Add to wishlist"
+        >
+          <Heart className={cn("h-3.5 w-3.5 transition-colors", wishlisted ? "fill-rose-500 text-rose-500" : "text-gray-600")} />
+        </button>
+
+        {/* Quick-add bar — slides up on hover (always visible on touch) */}
+        {inStock && (
+          <div className={cn(
+            "absolute bottom-0 left-0 right-0 transition-all duration-300 opacity-100 translate-y-0",
+            !hovered && "md:opacity-0 md:translate-y-2",
+          )}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                hasVariants ? onViewDetails(product) : (v && onAddToCart(product, v.id, 1));
+              }}
+              className="w-full py-3 bg-white/95 backdrop-blur-sm text-[10px] font-bold tracking-[0.18em] uppercase text-gray-900 hover:bg-gray-900 hover:text-white transition-colors"
+            >
+              {hasVariants ? "Select Options" : "Quick Add"}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Info below image */}
+      <div className="pt-3">
+        <p className="text-[13px] text-gray-900 font-medium leading-snug line-clamp-1 tracking-tight" style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontSize: "15px" }}>
+          {product.name}
+        </p>
+
+        {/* Color swatches */}
+        {colorValues.length > 0 && (
+          <div className="flex gap-1.5 mt-2 flex-wrap">
+            {colorValues.slice(0, 8).map((color, i) => (
+              <span key={i} className="h-3 w-3 rounded-full ring-1 ring-gray-200 shrink-0" style={{ background: color }} title={color} />
+            ))}
+            {colorValues.length > 8 && (
+              <span className="text-[10px] text-gray-400 self-center">+{colorValues.length - 8}</span>
+            )}
+          </div>
+        )}
+
+        {/* Price */}
+        <div className="flex items-baseline gap-2 mt-1.5">
+          {v?.compareAtPrice && (
+            <span className="text-xs text-gray-400 line-through">R{v.compareAtPrice.toFixed(2)}</span>
+          )}
+          {v && (
+            <span className={cn("text-sm font-semibold", isOnSale ? "text-rose-600" : "text-gray-900")}>
+              R{v.price.toFixed(2)}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Hero Slider (layered: background + optional foreground overlay) ──────────
 const HERO_HEIGHTS: Record<string, string> = {
   compact:  "h-[220px] md:h-[320px]",
-  standard: "h-[320px] md:h-[460px]",
-  tall:     "h-[420px] md:h-[600px]",
-  full:     "h-[70vh] md:h-[80vh]",
+  standard: "h-[320px] md:h-[480px]",
+  tall:     "h-[420px] md:h-[620px]",
+  full:     "h-[70vh] md:h-[85vh]",
 };
 
 function HeroSlider({
-  slides, storeName, tagline, accent, height,
+  slides, storeName, tagline, accent, height, forceSlideIdx, paused,
 }: {
-  slides: Array<{ image: string; heading?: string; subheading?: string; ctaText?: string }>;
+  slides: Array<{
+    image: string;
+    imagePosition?: string;
+    imageFit?: "cover" | "contain" | "fill-width";
+    imageWidth?: number;
+    imageHeight?: number;
+    offsetX?: number;
+    offsetY?: number;
+    overlayImage?: string;
+    overlayPosition?: "left" | "right" | "center";
+    overlaySize?: number;
+    bgColor?: string;
+    heading?: string;
+    subheading?: string;
+    ctaText?: string;
+  }>;
   storeName: string;
   tagline?: string;
   accent: string;
   height?: string;
+  forceSlideIdx?: number;
+  paused?: boolean;
 }) {
   const [idx, setIdx] = useState(0);
   const hasSlides = slides && slides.length > 0;
@@ -1829,10 +2550,14 @@ function HeroSlider({
   const heightClass = HERO_HEIGHTS[height || "standard"] ?? HERO_HEIGHTS.standard;
 
   useEffect(() => {
-    if (count <= 1) return;
-    const t = setInterval(() => setIdx((i) => (i + 1) % count), 5000);
+    if (forceSlideIdx !== undefined) setIdx(forceSlideIdx);
+  }, [forceSlideIdx]);
+
+  useEffect(() => {
+    if (count <= 1 || paused) return;
+    const t = setInterval(() => setIdx((i) => (i + 1) % count), 6000);
     return () => clearInterval(t);
-  }, [count]);
+  }, [count, paused]);
 
   const scrollToProducts = () => {
     const el = document.getElementById("store-products");
@@ -1840,7 +2565,6 @@ function HeroSlider({
     else window.scrollBy({ top: 500, behavior: "smooth" });
   };
 
-  // No configured slides → a styled gradient hero using the store name + accent.
   if (!hasSlides) {
     return (
       <section className={cn("relative overflow-hidden flex items-center", heightClass)} style={{ background: `linear-gradient(120deg, ${accent}, #0f172a)` }}>
@@ -1856,34 +2580,125 @@ function HeroSlider({
   }
 
   return (
-    <section className={cn("relative overflow-hidden bg-slate-900", heightClass)}>
-      {/* Sliding track — all slides side by side, translated horizontally */}
+    <section className={cn("relative overflow-hidden select-none", heightClass)} style={{ backgroundColor: slides[0]?.bgColor ?? "#1a1a1a" }}>
+      {/* Sliding track */}
       <div
         className="flex h-full w-full transition-transform duration-700 ease-[cubic-bezier(0.4,0,0.2,1)]"
         style={{ transform: `translateX(-${idx * 100}%)` }}
       >
-        {slides.map((s, i) => (
-          <div key={i} className="relative h-full w-full shrink-0 basis-full">
-            <img
-              src={s.image}
-              alt={s.heading || storeName}
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{ objectPosition: "center" }}
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-black/10" />
-            <div className="absolute inset-0 flex items-center">
-              <div className="max-w-7xl mx-auto px-6 w-full text-white">
-                <div className={cn("max-w-xl transition-all duration-700", i === idx ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4")}>
-                  {s.heading && <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight drop-shadow-lg">{s.heading}</h1>}
-                  {s.subheading && <p className="mt-3 text-base md:text-lg text-white/90 drop-shadow">{s.subheading}</p>}
-                  <button onClick={scrollToProducts} className="mt-6 inline-block font-bold px-7 py-3 rounded-full shadow-lg hover:scale-105 transition-transform text-white" style={{ background: accent }}>
-                    {s.ctaText || "Shop Now"}
-                  </button>
+        {slides.map((s, i) => {
+          const pos = s.overlayPosition ?? "right";
+          const hasOverlay = !!s.overlayImage;
+          const textOnLeft = !hasOverlay || pos === "right" || pos === "center";
+          const bgPos = `${s.offsetX ?? 50}% ${s.offsetY ?? 50}%`;
+
+          return (
+            <div key={i} className="relative h-full w-full shrink-0 basis-full overflow-hidden">
+
+              {/* ── Layer 1: background ── */}
+              {s.image ? (
+                (s.imageFit === "fill-width" || !s.imageFit) ? (
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      backgroundImage: `url(${s.image})`,
+                      backgroundSize: `${s.imageWidth ?? 100}% ${s.imageHeight ?? 100}%`,
+                      backgroundRepeat: "no-repeat",
+                      backgroundPosition: bgPos,
+                      backgroundColor: s.bgColor || "#1a1a1a",
+                    }}
+                  />
+                ) : (
+                  <img
+                    src={s.image}
+                    alt={s.heading || storeName}
+                    className={`absolute ${s.imageFit === "contain" ? "object-contain" : "object-cover"}`}
+                    style={{
+                      width: `${s.imageWidth ?? 100}%`,
+                      height: `${s.imageHeight ?? 100}%`,
+                      top: `${s.offsetY ?? 50}%`,
+                      left: `${s.offsetX ?? 50}%`,
+                      transform: "translate(-50%, -50%)",
+                    }}
+                  />
+                )
+              ) : (
+                <div className="absolute inset-0" style={{ background: s.bgColor || "#1a1a1a" }} />
+              )}
+
+              {/* ── Layer 2: gradient scrim — direction adapts to text side ── */}
+              <div
+                className="absolute inset-0"
+                style={{
+                  background: hasOverlay
+                    ? textOnLeft
+                      ? "linear-gradient(to right, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.30) 55%, rgba(0,0,0,0) 100%)"
+                      : "linear-gradient(to left,  rgba(0,0,0,0.72) 0%, rgba(0,0,0,0.30) 55%, rgba(0,0,0,0) 100%)"
+                    : "linear-gradient(to top, rgba(0,0,0,0.65) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.08) 100%)",
+                }}
+              />
+
+              {/* ── Layer 3: content (text + overlay image side by side) ── */}
+              <div className="absolute inset-0 flex">
+                <div className={cn(
+                  "max-w-7xl mx-auto px-6 w-full h-full flex items-end md:items-center gap-0",
+                  pos === "left" ? "flex-row-reverse" : "flex-row",
+                )}>
+
+                  {/* Text block */}
+                  <div className={cn(
+                    "flex-1 text-white pb-10 md:pb-0 z-10",
+                    i === idx ? "opacity-100 translate-y-0" : "opacity-0 translate-y-5",
+                    "transition-all duration-700",
+                    hasOverlay && pos !== "center" ? "max-w-[50%]" : "max-w-xl",
+                    pos === "left" ? "text-right" : "text-left",
+                  )}>
+                    {s.heading && (
+                      <h1 className="text-2xl sm:text-3xl md:text-5xl font-extrabold tracking-tight drop-shadow-lg leading-tight">
+                        {s.heading}
+                      </h1>
+                    )}
+                    {s.subheading && (
+                      <p className="mt-2 text-sm md:text-lg text-white/90 drop-shadow leading-snug">
+                        {s.subheading}
+                      </p>
+                    )}
+                    <button
+                      onClick={scrollToProducts}
+                      className={cn(
+                        "mt-5 inline-block font-bold px-6 py-3 text-sm md:text-base shadow-lg hover:scale-105 transition-transform text-white",
+                        pos === "left" ? "ml-auto block" : "",
+                      )}
+                      style={{ background: accent }}
+                    >
+                      {s.ctaText || "Shop Now"}
+                    </button>
+                  </div>
+
+                  {/* ── Layer 4: foreground overlay image ── */}
+                  {hasOverlay && (
+                    <div className={cn(
+                      "relative shrink-0 h-full flex items-end",
+                      pos === "center" ? "absolute inset-0 justify-center pointer-events-none" : "flex-1 justify-center",
+                    )}>
+                      <img
+                        src={s.overlayImage}
+                        alt=""
+                        className={cn(
+                          "object-contain object-bottom drop-shadow-2xl",
+                          i === idx ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8",
+                          "transition-all duration-700 delay-150",
+                          pos === "center" ? "max-w-[60%]" : "max-w-full",
+                        )}
+                        style={{ height: `${s.overlaySize ?? 90}%` }}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Prev / next arrows */}
@@ -1892,18 +2707,18 @@ function HeroSlider({
           <button
             onClick={() => setIdx((i) => (i - 1 + count) % count)}
             aria-label="Previous slide"
-            className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/35 hover:bg-black/55 text-white flex items-center justify-center backdrop-blur-sm transition-colors"
+            className="absolute left-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/35 hover:bg-black/55 text-white flex items-center justify-center backdrop-blur-sm transition-colors z-20"
           >
             <ChevronLeft className="h-5 w-5" />
           </button>
           <button
             onClick={() => setIdx((i) => (i + 1) % count)}
             aria-label="Next slide"
-            className="absolute right-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/35 hover:bg-black/55 text-white flex items-center justify-center backdrop-blur-sm transition-colors"
+            className="absolute right-3 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-black/35 hover:bg-black/55 text-white flex items-center justify-center backdrop-blur-sm transition-colors z-20"
           >
             <ChevronRight className="h-5 w-5" />
           </button>
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 z-20">
             {slides.map((_, i) => (
               <button
                 key={i}
@@ -1920,6 +2735,81 @@ function HeroSlider({
   );
 }
 
+// ─── Spec highlighter — wraps voltage & amperage tokens in the description ────
+const SPEC_RE = /(\d+(?:\.\d+)?(?:k(?:V|Ω)|[Vv]|m[Aa]|[Aa])(?:\b|(?=[^a-zA-Z])))/g;
+
+function HighlightedDesc({ text }: { text: string }) {
+  const parts = text.split(SPEC_RE);
+  return (
+    <span>
+      {parts.map((part, i) =>
+        SPEC_RE.test(part) ? (
+          <mark key={i} className="bg-yellow-200 text-yellow-900 rounded px-0.5 not-italic font-medium">
+            {part}
+          </mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
+  );
+}
+
+// ─── Similar Parts Finder ─────────────────────────────────────────────────────
+function findSimilarProducts(
+  product: PublicProduct,
+  allProducts: PublicProduct[],
+  threshold: number,
+): PublicProduct[] {
+  return allProducts
+    .filter(p => {
+      if (p.id === product.id) return false;
+      // Must be same category
+      if (product.category && p.category !== product.category) return false;
+      // If original has a subcategory AND the candidate also has one, they must match.
+      // Candidates with no subcategory set are still included (data may be incomplete).
+      if (product.subcategory && p.subcategory && p.subcategory !== product.subcategory) return false;
+      return true;
+    })
+    .map(p => {
+      let score = 0.25; // base: same category
+
+      // Subcategory match (most important for PNP/NPN etc.)
+      if (product.subcategory && p.subcategory) {
+        score += p.subcategory === product.subcategory ? 0.35 : 0; // already excluded above, so always +0.35 if both set
+      }
+
+      // Voltage range match
+      if (product.voltageRange && p.voltageRange) {
+        score += p.voltageRange === product.voltageRange ? 0.25 : 0;
+      }
+
+      // Amperage range match
+      if (product.amperageRange && p.amperageRange) {
+        score += p.amperageRange === product.amperageRange ? 0.1 : 0;
+      }
+
+      // RDSon match
+      if (product.rdson && p.rdson) {
+        score += p.rdson === product.rdson ? 0.1 : 0;
+      }
+
+      // Vbe match
+      if (product.vbe && p.vbe) {
+        score += p.vbe === product.vbe ? 0.1 : 0;
+      }
+
+      // In-stock bonus — prefer available parts
+      const inStock = p.variants.some(v => v.inStock);
+      if (inStock) score += 0.05;
+
+      return { product: p, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(({ product: p }) => p);
+}
+
 // ─── Product Detail Overlay ───────────────────────────────────────────────────
 function ProductDetailOverlay({
   product,
@@ -1927,19 +2817,35 @@ function ProductDetailOverlay({
   onClose,
   showSupplier = false,
   ecommerceSettings,
+  allProducts = [],
+  enableSimilarParts = false,
+  similarPartsThreshold = 30,
+  onViewProduct,
 }: {
   product: PublicProduct;
   onAddToCart: (p: PublicProduct, variantId: string, qty: number) => void;
   onClose: () => void;
   showSupplier?: boolean;
   ecommerceSettings: EcommerceSettings;
+  allProducts?: PublicProduct[];
+  enableSimilarParts?: boolean;
+  similarPartsThreshold?: number;
+  onViewProduct?: (p: PublicProduct) => void;
 }) {
+  const { storeSlug: overlayStoreSlug } = useParams();
   const [selectedVariant, setSelectedVariant] = useState(product.variants[0]);
   const [quantity, setQuantity] = useState(1);
   const [activeImage, setActiveImage] = useState(product.images?.[0]?.url);
   const [activeTab, setActiveTab] = useState<"description" | "details">("description");
+  const [showSimilar, setShowSimilar] = useState(false);
   const inStock = selectedVariant?.inStock ?? false;
-  const shareUrl = `${window.location.origin}/store/product/${encodeURIComponent(product.id)}`;
+  const similarProducts = useMemo(
+    () => showSimilar ? findSimilarProducts(product, allProducts, similarPartsThreshold) : [],
+    [showSimilar, product, allProducts, similarPartsThreshold]
+  );
+  const shareUrl = overlayStoreSlug
+    ? `${window.location.origin}/store/${overlayStoreSlug}/product/${encodeURIComponent(product.id)}`
+    : `${window.location.origin}/store/product/${encodeURIComponent(product.id)}`;
   const taxRate = getTaxRate(ecommerceSettings);
   const selectedPrice = selectedVariant?.price ?? 0;
   const selectedTax = calculateTax(selectedPrice, ecommerceSettings);
@@ -2002,7 +2908,7 @@ function ProductDetailOverlay({
               <h1 className="text-xl font-bold text-blue-800 uppercase leading-snug">{product.name}</h1>
               {showSupplier && product.brand && <p className="text-sm text-blue-700 font-medium mt-0.5">Supplier: <span className="underline">{product.brand}</span></p>}
               {selectedVariant?.sku && <p className="text-xs text-gray-500 mt-0.5">Product Code: {selectedVariant.sku}</p>}
-              <p className="text-xs text-gray-500">Product Status: <span className={`font-medium ${inStock ? "text-green-600" : "text-red-500"}`}>{inStock ? "Active" : "Out of Stock"}</span></p>
+              <p className="text-xs text-gray-500">Product Status: <span className={`font-medium ${product.status === 'on_order' ? "text-blue-600" : inStock ? "text-green-600" : "text-red-500"}`}>{product.status === 'on_order' ? "Special Order" : inStock ? "Active" : "Out of Stock"}</span></p>
             </div>
             <div>
               <p className="text-sm font-semibold text-gray-700 mb-1">Stock</p>
@@ -2019,7 +2925,7 @@ function ProductDetailOverlay({
                 <tbody>
                   <tr className="border-t border-gray-100">
                     <td className="px-3 py-2 text-gray-700">{ecommerceSettings.storeAddress || ecommerceSettings.storeName || "Main Warehouse"}</td>
-                    <td className="px-3 py-2"><StockPill inStock={selectedVariant?.inStock ?? false} /></td>
+                    <td className="px-3 py-2"><StockPill inStock={selectedVariant?.inStock ?? false} onOrder={product.status === 'on_order'} /></td>
                     {(ecommerceSettings as any).showQuantity && (
                       <td className="px-3 py-2 font-medium text-gray-800">{product.quantityInStock ?? 0}</td>
                     )}
@@ -2074,9 +2980,18 @@ function ProductDetailOverlay({
                 }`}
               >
                 <ShoppingCart className="h-4 w-4" />
-                {inStock ? "Add to Cart" : "Out of Stock"}
+                {inStock ? (product.status === 'on_order' ? "Place Order" : "Add to Cart") : "Out of Stock"}
               </button>
             </div>
+            {enableSimilarParts && (
+              <button
+                onClick={() => setShowSimilar(s => !s)}
+                className="w-full h-9 rounded border border-gray-200 text-sm text-gray-600 hover:border-blue-400 hover:text-blue-600 flex items-center justify-center gap-2 transition-colors"
+              >
+                <Search className="h-4 w-4" />
+                {showSimilar ? "Hide Similar Parts" : "Find Similar Parts"}
+              </button>
+            )}
             <div className="border-t border-gray-100 pt-3">
               <div className="flex gap-4 border-b border-gray-200 mb-3">
                 {(["description", "details"] as const).map((tab) => (
@@ -2115,6 +3030,147 @@ function ProductDetailOverlay({
             </div>
           </div>
         </div>
+        {enableSimilarParts && showSimilar && (
+          <div className="border-t border-gray-100 px-6 py-5">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
+              <Search className="h-4 w-4 text-blue-600" />
+              Similar Parts
+            </h3>
+
+            {/* ── Original product spec reference ── */}
+            <div className="mb-4 rounded-lg bg-blue-50 border border-blue-200 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500 mb-2">Specs for: {product.name}</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5">
+                {[
+                  { label: "Category",    value: product.category },
+                  { label: "Subcategory", value: product.subcategory },
+                  { label: "Voltage",     value: product.voltageRange },
+                  { label: "Amperage",    value: product.amperageRange },
+                  { label: "RDSon",       value: product.rdson },
+                  { label: "Vbe",         value: product.vbe },
+                ].map(({ label, value }) => (
+                  <div key={label}>
+                    <p className="text-[10px] text-blue-400 font-medium">{label}</p>
+                    <p className="text-xs font-semibold text-blue-800">{value || <span className="text-gray-400 font-normal">—</span>}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {similarProducts.length === 0 ? (
+              <p className="text-sm text-gray-400 py-2">No similar parts found. Try lowering the similarity threshold in store settings.</p>
+            ) : (
+              /* ── Table view for tablet/desktop comparison ── */
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-gray-50 border border-gray-200">
+                      <th className="text-left px-3 py-2 font-semibold text-gray-500 w-12"></th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">Part</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">Category</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">Subcategory</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">Voltage</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">Amperage</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">RDSon</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-600">Vbe</th>
+                      <th className="text-right px-3 py-2 font-semibold text-gray-600">Price</th>
+                      <th className="text-center px-3 py-2 font-semibold text-gray-600">Stock</th>
+                      <th className="text-center px-3 py-2 font-semibold text-gray-600 w-24"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {similarProducts.map((sim, idx) => {
+                      const v = sim.variants[0];
+                      const img = sim.images?.[0]?.url;
+                      const matchCat = sim.category === product.category;
+                      const matchSub = sim.subcategory && product.subcategory && sim.subcategory === product.subcategory;
+                      const matchVolt = sim.voltageRange && product.voltageRange && sim.voltageRange === product.voltageRange;
+                      const matchAmp = sim.amperageRange && product.amperageRange && sim.amperageRange === product.amperageRange;
+                      const matchRdson = sim.rdson && product.rdson && sim.rdson === product.rdson;
+                      const matchVbe = sim.vbe && product.vbe && sim.vbe === product.vbe;
+                      return (
+                        <tr key={sim.id} className={`border-b border-gray-100 hover:bg-blue-50/40 transition-colors ${idx % 2 === 0 ? "" : "bg-gray-50/50"}`}>
+                          <td className="px-3 py-2">
+                            <div className="h-10 w-10 rounded bg-gray-100 flex items-center justify-center overflow-hidden shrink-0">
+                              {img
+                                ? <img src={img} alt={sim.name} className="max-h-full max-w-full object-contain" />
+                                : <Package className="h-5 w-5 text-gray-300" />}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 max-w-[200px]">
+                            <p className="font-semibold text-blue-800 uppercase leading-tight">{sim.name}</p>
+                            {v?.sku && <p className="text-[10px] text-gray-400 mt-0.5">{v.sku}</p>}
+                            {(sim.shortDescription || sim.description) && (
+                              <p className="text-[10px] text-gray-500 mt-0.5 line-clamp-2 leading-snug">
+                                <HighlightedDesc text={sim.shortDescription || sim.description} />
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${matchCat ? "bg-green-100 text-green-700" : "text-gray-500"}`}>
+                              {sim.category || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${matchSub ? "bg-green-100 text-green-700" : "text-gray-500"}`}>
+                              {sim.subcategory || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${matchVolt ? "bg-green-100 text-green-700" : "text-gray-500"}`}>
+                              {sim.voltageRange || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${matchAmp ? "bg-green-100 text-green-700" : "text-gray-500"}`}>
+                              {sim.amperageRange || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${matchRdson ? "bg-green-100 text-green-700" : "text-gray-500"}`}>
+                              {sim.rdson || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${matchVbe ? "bg-green-100 text-green-700" : "text-gray-500"}`}>
+                              {sim.vbe || "—"}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right font-bold text-[#cc1818]">R{(v?.price ?? 0).toFixed(2)}</td>
+                          <td className="px-3 py-2 text-center">
+                            <StockPill inStock={v?.inStock ?? false} onOrder={sim.status === 'on_order'} />
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="flex gap-1 justify-center">
+                              {onViewProduct && (
+                                <button
+                                  onClick={() => { onViewProduct(sim); setShowSimilar(false); }}
+                                  className="h-7 px-2 text-xs rounded border border-blue-400 text-blue-600 hover:bg-blue-50 transition-colors whitespace-nowrap"
+                                >
+                                  View
+                                </button>
+                              )}
+                              <button
+                                onClick={() => { if (v) onAddToCart(sim, v.id, 1); }}
+                                disabled={!v?.inStock}
+                                className={`h-7 px-2 text-xs rounded font-medium transition-colors whitespace-nowrap ${v?.inStock ? "bg-blue-600 hover:bg-blue-700 text-white" : "bg-gray-100 text-gray-400 cursor-not-allowed"}`}
+                              >
+                                {v?.inStock ? "+ Cart" : "Out"}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-gray-400 mt-2">
+                  <span className="inline-block bg-green-100 text-green-700 px-1 rounded mr-1">Green</span> = matches original spec
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3065,6 +4121,58 @@ function CheckoutOverlay({
         <button onClick={onComplete} className="w-full text-xs text-gray-400 hover:text-gray-600 underline">
           {isWalkIn ? "Cancel walk-in sale" : "Clear cart and close"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// ── FashionFilterBar ──────────────────────────────────────────────────────
+// Clean editorial underline-tab filter used by the Fashion template.
+function FashionFilterBar({
+  categories, selected, onSelect, inStockOnly, onStockToggle, accent,
+}: {
+  categories: Array<{ id: string; name: string; productCount?: number }>;
+  selected: string;
+  onSelect: (id: string) => void;
+  inStockOnly: boolean;
+  onStockToggle: (v: boolean) => void;
+  accent: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div className="bg-white border-b border-gray-100 sticky top-[140px] md:top-[156px] z-30">
+      <div className="max-w-7xl mx-auto px-4 md:px-8">
+        <div className="flex items-center justify-between">
+          {/* Tab row */}
+          <div ref={scrollRef} className="flex items-center overflow-x-auto scrollbar-none gap-0">
+            {[{ id: "all", name: "All" }, ...categories].map((cat) => (
+              <button
+                key={cat.id}
+                onClick={() => onSelect(cat.id)}
+                className={cn(
+                  "shrink-0 px-4 md:px-5 py-4 text-[11px] font-semibold uppercase tracking-[0.14em] border-b-2 transition-all whitespace-nowrap",
+                  selected === cat.id
+                    ? "border-gray-900 text-gray-900"
+                    : "border-transparent text-gray-400 hover:text-gray-700 hover:border-gray-300",
+                )}
+              >
+                {cat.name}
+              </button>
+            ))}
+          </div>
+
+          {/* In-stock toggle (right side) */}
+          <label className="hidden md:flex items-center gap-2 shrink-0 ml-4 cursor-pointer select-none">
+            <div
+              onClick={() => onStockToggle(!inStockOnly)}
+              className={cn("relative w-8 h-4 rounded-full transition-colors cursor-pointer", inStockOnly ? "bg-gray-900" : "bg-gray-200")}
+            >
+              <div className={cn("absolute top-0.5 h-3 w-3 rounded-full bg-white shadow-sm transition-transform", inStockOnly ? "translate-x-4" : "translate-x-0.5")} />
+            </div>
+            <span className="text-[10px] uppercase tracking-widest text-gray-400 whitespace-nowrap">In stock only</span>
+          </label>
+        </div>
       </div>
     </div>
   );

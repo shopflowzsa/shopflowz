@@ -3,7 +3,7 @@ import JsBarcode from "jsbarcode";
 import { generateBarcode } from "@/lib/barcodeService";
 import {
   Package, Plus, Search, Edit2, Trash2, TrendingUp, TrendingDown,
-  AlertTriangle, ChevronDown, ChevronUp, BarChart3, X, RefreshCw, Upload, Image, Download, CheckSquare, Square, Settings, Copy,
+  AlertTriangle, ChevronDown, ChevronUp, ChevronRight, BarChart3, X, RefreshCw, Upload, Image, Download, CheckSquare, Square, Settings, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/contexts/AuthContext";
-import { inventoryService, InventoryItem, StockMovement } from "@/lib/inventoryService";
+import { inventoryService, InventoryItem, StockMovement, VOLTAGE_RANGES, AMPERAGE_RANGES } from "@/lib/inventoryService";
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 import { uploadImageToCloudinary, getThumbnailUrl } from "@/lib/cloudinaryService";
@@ -33,10 +33,7 @@ import InventoryPrinterSettings, {
   type LabelTemplateConfig,
 } from "@/components/crm/InventoryPrinterSettings";
 
-const DEFAULT_CATEGORIES = [
-  "Speaker Parts", "Amplifier Parts", "Connectors", "Cables", "Tools",
-  "Consumables", "Electronics", "Other",
-];
+const DEFAULT_CATEGORIES: string[] = [];
 const REASONS = [
   "Purchase / Received stock",
   "Sale / Used in repair",
@@ -70,9 +67,9 @@ function BarcodeDisplay({ value, height = 40 }: { value: string; height?: number
 
 function emptyItem(): Omit<InventoryItem, "id" | "createdAt" | "updatedAt"> {
   return {
-    name: "", sku: "", description: "", category: "Speaker Parts",
+    name: "", sku: "", description: "", category: "",
     price: 0, salePrice: undefined, costPrice: 0, quantity: 0, reorderLevel: 5,
-    supplier: "", location: "", imageUrl: "", status: "active",
+    manufacturer: "", supplier: "", location: "", imageUrl: "", status: "active",
     itemType: "inventory",
     packSize: undefined, packPrice: undefined,
     extraImages: [],
@@ -82,15 +79,17 @@ function emptyItem(): Omit<InventoryItem, "id" | "createdAt" | "updatedAt"> {
 
 interface InventoryPageProps {
   onClose: () => void;
+  initialSearch?: string;
 }
 
-export function InventoryPage({ onClose }: InventoryPageProps) {
+export function InventoryPage({ onClose, initialSearch }: InventoryPageProps) {
   const { user, workspaceId } = useAuth();
 
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"products" | "movements" | "barcodes" | "batch" | "printer">("products");
+  const [tab, setTab] = useState<"products" | "movements" | "barcodes" | "batch" | "printer" | "recently_added" | "latest_edited" | "latest_sold" | "to_order">("products");
+  const [recentDays, setRecentDays] = useState(2);
   const [printerConfig, setPrinterConfig] = useState<InventoryPrinterConfig>(DEFAULT_PRINTER_CONFIG);
   const [barcodeSearch, setBarcodeSearch] = useState("");
   const [selectedBarcodeItems, setSelectedBarcodeItems] = useState<Set<string>>(new Set());
@@ -119,7 +118,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     });
   }
 
-  const [searchInput, setSearchInput] = useState("");
+  const [searchInput, setSearchInput] = useState(initialSearch ?? "");
   const searchTerm = searchInput;
   const [filterCategory, setFilterCategory] = useState("all");
   const [filterStatus, setFilterStatus] = useState<"all" | "low" | "out">("all");
@@ -148,7 +147,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
   const [showBulkActions, setShowBulkActions] = useState(false);
   const [bulkAction, setBulkAction] = useState<'delete' | 'category' | 'status' | 'quickUpdate' | null>(null);
   const [bulkCategory, setBulkCategory] = useState("");
-  const [bulkStatus, setBulkStatus] = useState<"active" | "inactive">("active");
+  const [bulkStatus, setBulkStatus] = useState<"active" | "inactive" | "on_order">("active");
   const [processingBulk, setProcessingBulk] = useState(false);
 
   // Image upload
@@ -198,6 +197,15 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
   const [newCategory, setNewCategory] = useState("");
   const [editingCategory, setEditingCategory] = useState<string | null>(null);
   const [editCategoryValue, setEditCategoryValue] = useState("");
+  // Subcategory management
+  const [subcategoryMap, setSubcategoryMap] = useState<Record<string, string[]>>({});
+  const [filterSubcategory, setFilterSubcategory] = useState("all");
+  const [filterVoltage, setFilterVoltage] = useState("all");
+  const [filterAmperage, setFilterAmperage] = useState("all");
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
+  const [newSubcategory, setNewSubcategory] = useState("");
+  const [editingSubcategory, setEditingSubcategory] = useState<{ cat: string; sub: string } | null>(null);
+  const [editSubcategoryValue, setEditSubcategoryValue] = useState("");
   // Inline "+ Add category" inside the Add/Edit Item form
   const [showInlineNewCategory, setShowInlineNewCategory] = useState(false);
   const [inlineNewCategory, setInlineNewCategory] = useState("");
@@ -215,78 +223,98 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       const { data: row } = await supabase.from('workspace_settings').select('data').eq('workspace_id', workspaceId).eq('category', 'inventory').single();
       const cats = (row?.data as any)?.categories;
       if (cats) setCategories(cats);
+      const subs = (row?.data as any)?.subcategories;
+      if (subs) setSubcategoryMap(subs);
     } catch (error) {
       console.error('Failed to load categories:', error);
     }
   }
 
-  async function saveCategories(newCategories: string[]) {
+  async function saveCategoryData(newCategories: string[], newSubMap: Record<string, string[]>) {
     if (!workspaceId) return;
     try {
-      // Read existing settings to merge
       const { data: row } = await supabase.from('workspace_settings').select('data').eq('workspace_id', workspaceId).eq('category', 'inventory').single();
       const existing = (row?.data as any) || {};
-      await supabaseServiceRole.from('workspace_settings').upsert({ workspace_id: workspaceId, category: 'inventory', data: { ...existing, categories: newCategories } }, { onConflict: 'workspace_id,category' });
+      await supabaseServiceRole.from('workspace_settings').upsert(
+        { workspace_id: workspaceId, category: 'inventory', data: { ...existing, categories: newCategories, subcategories: newSubMap } },
+        { onConflict: 'workspace_id,category' }
+      );
       setCategories(newCategories);
-      toast({
-        title: "Success",
-        description: "Categories updated successfully",
-      });
+      setSubcategoryMap(newSubMap);
+      toast({ title: "Saved", description: "Categories updated" });
     } catch (error: any) {
-      toast({
-        title: "Error",
-        description: error.message || "Failed to save categories",
-        variant: "destructive",
-      });
+      toast({ title: "Error", description: error.message || "Failed to save categories", variant: "destructive" });
     }
   }
 
   async function handleAddCategory() {
     if (!newCategory.trim()) return;
     if (categories.includes(newCategory.trim())) {
-      toast({
-        title: "Duplicate",
-        description: "This category already exists",
-        variant: "destructive",
-      });
+      toast({ title: "Duplicate", description: "This category already exists", variant: "destructive" });
       return;
     }
-    const updated = [...categories, newCategory.trim()];
-    await saveCategories(updated);
+    await saveCategoryData([...categories, newCategory.trim()], subcategoryMap);
     setNewCategory("");
   }
 
   async function handleEditCategory(oldCategory: string) {
-    if (!editCategoryValue.trim()) return;
-    if (oldCategory === editCategoryValue.trim()) {
-      setEditingCategory(null);
+    const newName = editCategoryValue.trim();
+    if (!newName) return;
+    if (oldCategory === newName) { setEditingCategory(null); return; }
+    if (categories.includes(newName)) {
+      toast({ title: "Duplicate", description: "This category already exists", variant: "destructive" });
       return;
     }
-    if (categories.includes(editCategoryValue.trim())) {
-      toast({
-        title: "Duplicate",
-        description: "This category already exists",
-        variant: "destructive",
-      });
-      return;
-    }
-    const updated = categories.map(c => c === oldCategory ? editCategoryValue.trim() : c);
-    await saveCategories(updated);
+    const updated = categories.map(c => c === oldCategory ? newName : c);
+    // Move subcategories to new name
+    const newSubMap = { ...subcategoryMap };
+    if (newSubMap[oldCategory]) { newSubMap[newName] = newSubMap[oldCategory]; delete newSubMap[oldCategory]; }
+    await saveCategoryData(updated, newSubMap);
     setEditingCategory(null);
     setEditCategoryValue("");
   }
 
   async function handleDeleteCategory(category: string) {
     if (categories.length === 1) {
-      toast({
-        title: "Cannot delete",
-        description: "You must have at least one category",
-        variant: "destructive",
-      });
+      toast({ title: "Cannot delete", description: "You must have at least one category", variant: "destructive" });
       return;
     }
-    const updated = categories.filter(c => c !== category);
-    await saveCategories(updated);
+    const newSubMap = { ...subcategoryMap };
+    delete newSubMap[category];
+    await saveCategoryData(categories.filter(c => c !== category), newSubMap);
+    if (filterCategory === category) setFilterCategory("all");
+    if (expandedCategory === category) setExpandedCategory(null);
+  }
+
+  async function handleAddSubcategory(category: string) {
+    const sub = newSubcategory.trim();
+    if (!sub) return;
+    const existing = subcategoryMap[category] || [];
+    if (existing.includes(sub)) {
+      toast({ title: "Duplicate", description: "This subcategory already exists", variant: "destructive" });
+      return;
+    }
+    await saveCategoryData(categories, { ...subcategoryMap, [category]: [...existing, sub] });
+    setNewSubcategory("");
+  }
+
+  async function handleDeleteSubcategory(category: string, sub: string) {
+    const updated = (subcategoryMap[category] || []).filter(s => s !== sub);
+    await saveCategoryData(categories, { ...subcategoryMap, [category]: updated });
+    if (filterSubcategory === sub) setFilterSubcategory("all");
+  }
+
+  async function handleEditSubcategory(category: string, oldSub: string) {
+    const newSub = editSubcategoryValue.trim();
+    if (!newSub || newSub === oldSub) { setEditingSubcategory(null); setEditSubcategoryValue(""); return; }
+    const subs = subcategoryMap[category] || [];
+    if (subs.includes(newSub)) {
+      toast({ title: "Duplicate", description: "This subcategory already exists", variant: "destructive" });
+      return;
+    }
+    await saveCategoryData(categories, { ...subcategoryMap, [category]: subs.map(s => s === oldSub ? newSub : s) });
+    setEditingSubcategory(null);
+    setEditSubcategoryValue("");
   }
 
   async function load() {
@@ -307,18 +335,25 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
     }
   }
 
+  // Items with no name — corrupted/blank records to clean up
+  const blankItems = useMemo(() => items.filter(i => !i.name?.trim()), [items]);
+
   const filteredItems = useMemo(() => {
-    let result = items;
+    // Always exclude blank (nameless) records from the main product view
+    let result = items.filter(i => i.name?.trim());
     if (searchTerm) {
       const words = searchTerm.toLowerCase().split(/\s+/).filter(Boolean);
       result = result.filter((i) => {
-        const haystack = [i.name, i.sku, i.category, i.supplier, i.description]
+        const haystack = [i.name, i.sku, i.category, i.supplier, i.manufacturer, i.description]
           .map(v => (v || "").toLowerCase())
           .join(" ");
         return words.every(w => haystack.includes(w));
       });
     }
     if (filterCategory !== "all") result = result.filter((i) => i.category === filterCategory);
+    if (filterSubcategory !== "all") result = result.filter((i) => (i as any).subcategory === filterSubcategory);
+    if (filterVoltage !== "all") result = result.filter((i) => (i as any).voltageRange === filterVoltage);
+    if (filterAmperage !== "all") result = result.filter((i) => (i as any).amperageRange === filterAmperage);
     if (filterStatus === "low") result = result.filter((i) => i.quantity > 0 && i.quantity <= i.reorderLevel);
     if (filterStatus === "out") result = result.filter((i) => i.quantity === 0);
     return [...result].sort((a, b) => {
@@ -328,14 +363,19 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       if (sortField === "price") return mul * (a.price - b.price);
       return 0;
     });
-  }, [items, searchTerm, filterCategory, filterStatus, sortField, sortDir]);
+  }, [items, searchTerm, filterCategory, filterSubcategory, filterVoltage, filterAmperage, filterStatus, sortField, sortDir]);
+
+  const allVoltageOptions = useMemo(() =>
+    [...new Set(items.map(i => (i as any).voltageRange).filter(Boolean))].sort() as string[], [items]);
+  const allAmperageOptions = useMemo(() =>
+    [...new Set(items.map(i => (i as any).amperageRange).filter(Boolean))].sort() as string[], [items]);
 
   const stats = useMemo(() => ({
     total: items.length,
     lowStock: items.filter((i) => i.quantity > 0 && i.quantity <= i.reorderLevel).length,
     outOfStock: items.filter((i) => i.quantity === 0).length,
-    costValue: items.reduce((sum, i) => sum + i.costPrice * i.quantity, 0),
-    retailValue: items.reduce((sum, i) => sum + i.price * i.quantity, 0),
+    costValue: items.reduce((sum, i) => sum + (Number(i.costPrice) || 0) * (Number(i.quantity) || 0), 0),
+    retailValue: items.reduce((sum, i) => sum + (Number(i.price) || 0) * (Number(i.quantity) || 0), 0),
   }), [items]);
 
   // ─── Barcode tab helpers ─────────────────────────────────────────────────────
@@ -349,6 +389,22 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
         (i.barcode || "").includes(q)
     );
   }, [items, barcodeSearch]);
+
+  const [deletingBlanks, setDeletingBlanks] = useState(false);
+  async function deleteBlankItems() {
+    if (!workspaceId || blankItems.length === 0) return;
+    setDeletingBlanks(true);
+    try {
+      for (const item of blankItems) {
+        await inventoryService.delete(workspaceId, item.id);
+      }
+      setItems(prev => prev.filter(i => i.name?.trim()));
+    } catch (e: any) {
+      setErrorMsg(e?.message || "Failed to delete blank items");
+    } finally {
+      setDeletingBlanks(false);
+    }
+  }
 
   async function generateAllMissingBarcodes() {
     if (!workspaceId) return;
@@ -507,7 +563,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
 
   function openAdd() {
     setEditingItem(null);
-    setFormData(emptyItem());
+    setFormData({ ...emptyItem(), category: categories[0] ?? "" });
     setImageFile(null);
     setImagePreview(null);
     setPendingExtraImages([]);
@@ -521,7 +577,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       name: item.name, sku: item.sku, description: item.description,
       category: item.category, price: item.price, costPrice: item.costPrice,
       quantity: item.quantity, reorderLevel: item.reorderLevel,
-      supplier: item.supplier, location: item.location,
+      manufacturer: item.manufacturer ?? "", supplier: item.supplier, location: item.location,
       imageUrl: item.imageUrl || "", status: item.status,
       itemType: item.itemType ?? "inventory",
       packSize: (item as any).packSize, packPrice: (item as any).packPrice,
@@ -1164,7 +1220,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
         name: row[columnMapping.name] || '',
         sku: row[columnMapping.sku] || '',
         description: (columnMapping.description && columnMapping.description !== '__skip__') ? row[columnMapping.description] || '' : '',
-        category: (columnMapping.category && columnMapping.category !== '__skip__') ? row[columnMapping.category] || 'Other' : 'Other',
+        category: (columnMapping.category && columnMapping.category !== '__skip__') ? row[columnMapping.category] || categories[0] || '' : categories[0] || '',
         price: (columnMapping.price && columnMapping.price !== '__skip__') ? parseFloat(String(row[columnMapping.price] || '0').replace(/[^0-9.-]/g, '')) || 0 : 0,
         costPrice: (columnMapping.costPrice && columnMapping.costPrice !== '__skip__') ? parseFloat(String(row[columnMapping.costPrice] || '0').replace(/[^0-9.-]/g, '')) || 0 : 0,
         quantity: (columnMapping.quantity && columnMapping.quantity !== '__skip__') ? parseInt(String(row[columnMapping.quantity] || '0').replace(/[^0-9]/g, '')) || 0 : 0,
@@ -1478,6 +1534,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
   }
 
   function stockBadge(item: InventoryItem) {
+    if (item.status === "on_order") return <Badge className="bg-blue-100 text-blue-800 hover:bg-blue-100">On order</Badge>;
     if (item.quantity === 0) return <Badge variant="destructive">Out of stock</Badge>;
     if (item.quantity <= item.reorderLevel) return <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Low stock</Badge>;
     return <Badge className="bg-green-100 text-green-800 hover:bg-green-100">In stock</Badge>;
@@ -1496,7 +1553,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
           <Button variant="outline" size="sm" onClick={() => setShowSettings(true)}>
-            <Settings className="h-4 w-4 mr-1" /> Settings
+            <Settings className="h-4 w-4 mr-1" /> Categories
           </Button>
           <Button variant="outline" size="sm" onClick={() => setShowImportCSV(true)}>
             <Upload className="h-4 w-4 mr-1" /> Import
@@ -1538,13 +1595,13 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       )}
 
       {/* Tabs */}
-      <div className="flex gap-4 px-4 pt-3 shrink-0">
-        {(["products", "movements", "barcodes", "batch", "printer"] as const).map((t) => (
+      <div className="flex gap-4 px-4 pt-3 shrink-0 overflow-x-auto border-b border-border">
+        {(["products", "movements", "barcodes", "batch", "printer", "recently_added", "latest_edited", "latest_sold", "to_order"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={cn(
-              "pb-2 text-sm font-medium capitalize border-b-2 transition-colors whitespace-nowrap",
+              "pb-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap -mb-px",
               tab === t ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
             )}
           >
@@ -1552,7 +1609,11 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
               : t === "movements" ? "Stock Movements"
               : t === "barcodes" ? "Barcodes"
               : t === "batch" ? "Batch Editor"
-              : "Printer Settings"}
+              : t === "printer" ? "Printer Settings"
+              : t === "recently_added" ? "Recently Added"
+              : t === "latest_edited" ? "Latest Edited"
+              : t === "latest_sold" ? "Latest Sold"
+              : "To Order"}
           </button>
         ))}
       </div>
@@ -1571,6 +1632,24 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
           </div>
         ) : tab === "products" ? (
           <>
+            {/* Blank items warning */}
+            {blankItems.length > 0 && (
+              <div className="mb-3 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5">
+                <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                <p className="text-sm text-amber-800 flex-1">
+                  <span className="font-semibold">{blankItems.length} blank record{blankItems.length !== 1 ? "s" : ""}</span> found with no name or data — likely from a failed import. They are hidden from the list below.
+                </p>
+                <button
+                  onClick={deleteBlankItems}
+                  disabled={deletingBlanks}
+                  className="shrink-0 flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:text-red-800 border border-red-200 bg-white rounded px-2.5 py-1 transition-colors disabled:opacity-50"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  {deletingBlanks ? "Deleting…" : `Delete ${blankItems.length} blank`}
+                </button>
+              </div>
+            )}
+
             {/* Filters */}
             <div className="flex flex-wrap items-center gap-2 mb-3">
               <div className="relative flex-1 min-w-[180px]">
@@ -1582,13 +1661,42 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                   onChange={(e) => setSearchInput(e.target.value)}
                 />
               </div>
-              <Select value={filterCategory} onValueChange={setFilterCategory}>
+              <Select value={filterCategory} onValueChange={(v) => { setFilterCategory(v); setFilterSubcategory("all"); }}>
                 <SelectTrigger className="h-8 text-sm w-[150px]">
                   <SelectValue placeholder="Category" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All categories</SelectItem>
                   {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {filterCategory !== "all" && (subcategoryMap[filterCategory]?.length ?? 0) > 0 && (
+                <Select value={filterSubcategory} onValueChange={setFilterSubcategory}>
+                  <SelectTrigger className="h-8 text-sm w-[160px]">
+                    <SelectValue placeholder="Subcategory" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All subcategories</SelectItem>
+                    {(subcategoryMap[filterCategory] || []).map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
+              <Select value={filterVoltage} onValueChange={setFilterVoltage}>
+                <SelectTrigger className="h-8 text-sm w-[150px]">
+                  <SelectValue placeholder="Voltage" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All voltages</SelectItem>
+                  {allVoltageOptions.map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={filterAmperage} onValueChange={setFilterAmperage}>
+                <SelectTrigger className="h-8 text-sm w-[160px]">
+                  <SelectValue placeholder="Amperage" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All amperages</SelectItem>
+                  {allAmperageOptions.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
                 </SelectContent>
               </Select>
               <Select value={filterStatus} onValueChange={(v) => setFilterStatus(v as any)}>
@@ -1745,7 +1853,11 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                                   <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-700 border border-blue-200">SERVICE</span>
                                 )}
                               </div>
-                              {item.supplier && <div className="text-xs text-muted-foreground">{item.supplier}</div>}
+                              {(item.manufacturer || item.supplier) && (
+                                <div className="text-xs text-muted-foreground">
+                                  {[item.manufacturer, item.supplier].filter(Boolean).join(" · ")}
+                                </div>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -1758,8 +1870,8 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                           {item.itemType === "service" ? "—" : item.quantity}
                         </td>
                         <td className="px-3 py-2 hidden md:table-cell">{item.itemType === "service" ? <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-700">No stock</span> : stockBadge(item)}</td>
-                        <td className="px-3 py-2 text-right hidden sm:table-cell">R{item.price.toFixed(2)}</td>
-                        <td className="px-3 py-2 text-right text-muted-foreground hidden lg:table-cell">R{item.costPrice.toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right hidden sm:table-cell">R{(Number(item.price) || 0).toFixed(2)}</td>
+                        <td className="px-3 py-2 text-right text-muted-foreground hidden lg:table-cell">R{(Number(item.costPrice) || 0).toFixed(2)}</td>
                         <td className="px-3 py-2 text-right">
                           <div className="flex items-center justify-end gap-1">
                             {item.itemType !== "service" && (
@@ -2127,13 +2239,35 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                       )}
                     </button>
 
+                    {/* Thumbnail */}
+                    {item.imageUrl ? (
+                      <img
+                        src={item.imageUrl}
+                        alt={item.name}
+                        className="h-12 w-12 rounded object-contain bg-gray-50 border border-gray-100 shrink-0"
+                      />
+                    ) : (
+                      <div className="h-12 w-12 rounded bg-gray-100 flex items-center justify-center shrink-0">
+                        <Package className="h-5 w-5 text-gray-300" />
+                      </div>
+                    )}
+
                     {/* Item info */}
-                    <div className="w-[160px] shrink-0">
-                      <p className="text-sm font-medium truncate">{item.name}</p>
+                    <div className="w-[220px] shrink-0">
+                      <p className="text-sm font-semibold truncate leading-tight">{item.name}</p>
                       <p className="text-xs text-muted-foreground font-mono">{item.sku}</p>
                       {item.category && (
-                        <p className="text-xs text-muted-foreground">{item.category}</p>
+                        <p className="text-xs text-muted-foreground">{item.category}{item.subcategory ? ` · ${item.subcategory}` : ""}</p>
                       )}
+                      {item.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2 leading-tight">{item.description}</p>
+                      )}
+                      <p className="text-xs font-bold text-green-700 mt-0.5">
+                        R{(item.salePrice ?? item.price ?? 0).toFixed(2)}
+                        {item.salePrice && item.salePrice < item.price && (
+                          <span className="text-muted-foreground font-normal line-through ml-1">R{item.price.toFixed(2)}</span>
+                        )}
+                      </p>
                     </div>
 
                     {/* Barcode visual */}
@@ -2212,6 +2346,54 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
             workspaceId={workspaceId}
             onConfigChange={setPrinterConfig}
           />
+        )}
+
+        {/* ── Recently Added / Latest Edited tabs — inline batch editor with date filter ── */}
+        {(tab === "recently_added" || tab === "latest_edited") && workspaceId && (
+          <div className="h-full -mx-4 -my-3 flex flex-col">
+            {/* Day filter bar */}
+            <div className="flex items-center gap-2 px-4 py-2 border-b border-border shrink-0">
+              <span className="text-xs text-muted-foreground font-medium">Show last:</span>
+              {[1, 2, 3, 4].map(d => (
+                <button
+                  key={d}
+                  onClick={() => setRecentDays(d)}
+                  className={cn(
+                    "px-3 py-1 rounded-full text-xs font-semibold border transition-colors",
+                    recentDays === d
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border text-muted-foreground hover:border-primary hover:text-foreground"
+                  )}
+                >
+                  {d} {d === 1 ? "day" : "days"}
+                </button>
+              ))}
+              <span className="ml-2 text-xs text-muted-foreground">
+                {tab === "recently_added" ? "Items added in this window" : "Items edited in this window"}
+              </span>
+            </div>
+            {/* Full batch editor scoped to date window */}
+            <div className="flex-1 overflow-hidden">
+              <InventoryBulkEditor
+                key={`${tab}_${recentDays}`}
+                workspaceId={workspaceId}
+                embedded
+                onClose={() => setTab("products")}
+                filterSince={new Date(Date.now() - recentDays * 24 * 60 * 60 * 1000)}
+                filterMode={tab === "recently_added" ? "added" : "edited"}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ── Latest Sold / Removed tab ── */}
+        {tab === "latest_sold" && workspaceId && (
+          <LatestSoldTab workspaceId={workspaceId} items={items} />
+        )}
+
+        {/* ── To Order tab ── */}
+        {tab === "to_order" && workspaceId && (
+          <ToOrderTab workspaceId={workspaceId} />
         )}
       </div>
 
@@ -2347,7 +2529,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                     setFormData({ ...formData, category: v });
                   }}
                 >
-                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select category…" /></SelectTrigger>
                   <SelectContent>
                     {categories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                     <SelectItem value="__add_new__" className="text-blue-600 font-medium">
@@ -2356,6 +2538,53 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                   </SelectContent>
                 </Select>
               )}
+              {/* Subcategory — only shown when selected category has subcategories */}
+              {formData.category && (subcategoryMap[formData.category]?.length ?? 0) > 0 && (
+                <div className="mt-2">
+                  <Label className="text-xs">Subcategory</Label>
+                  <Select
+                    value={(formData as any).subcategory || "__none__"}
+                    onValueChange={(v) => setFormData({ ...formData, subcategory: v === "__none__" ? "" : v } as any)}
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select subcategory…" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— None —</SelectItem>
+                      {(subcategoryMap[formData.category] || []).map((s) => (
+                        <SelectItem key={s} value={s}>{s}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {/* Voltage & Amperage — exact values */}
+              <div className="mt-2 grid grid-cols-2 gap-3">
+                <div>
+                  <Label className="text-xs">Voltage</Label>
+                  <Select
+                    value={(formData as any).voltageRange || "__none__"}
+                    onValueChange={(v) => setFormData({ ...formData, voltageRange: v === "__none__" ? undefined : v } as any)}
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select…" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— Not set —</SelectItem>
+                      {VOLTAGE_RANGES.map((v) => <SelectItem key={v} value={v}>{v}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">Amperage</Label>
+                  <Select
+                    value={(formData as any).amperageRange || "__none__"}
+                    onValueChange={(v) => setFormData({ ...formData, amperageRange: v === "__none__" ? undefined : v } as any)}
+                  >
+                    <SelectTrigger className="mt-1"><SelectValue placeholder="Select…" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— Not set —</SelectItem>
+                      {AMPERAGE_RANGES.map((a) => <SelectItem key={a} value={a}>{a}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </div>
             <div>
               <Label htmlFor="desc" className="text-xs">Description</Label>
@@ -2487,6 +2716,12 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                   <Input value={formData.supplier} onChange={(e) => setFormData({ ...formData, supplier: e.target.value })} className="mt-1" />
                 </div>
               </div>
+            )}
+            {formData.itemType !== "service" && (
+            <div>
+              <Label className="text-xs">Manufacturer</Label>
+              <Input value={(formData as any).manufacturer ?? ""} onChange={(e) => setFormData({ ...formData, manufacturer: e.target.value } as any)} className="mt-1" placeholder="e.g. Samsung, Bosch, LG" />
+            </div>
             )}
             {formData.itemType !== "service" && (
             <div>
@@ -2660,6 +2895,7 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
                 <SelectContent>
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="on_order">On Order</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -2717,116 +2953,117 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
       <Dialog open={showSettings} onOpenChange={setShowSettings}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>Inventory Settings</DialogTitle>
+            <DialogTitle>Product Categories</DialogTitle>
           </DialogHeader>
-          
-          <div className="space-y-6 py-4 overflow-y-auto flex-1">
-            {/* Categories Management */}
-            <div>
-              <h3 className="text-sm font-semibold mb-3">Product Categories</h3>
-              
-              {/* Add New Category */}
-              <div className="flex gap-2 mb-4">
-                <Input
-                  placeholder="New category name..."
-                  value={newCategory}
-                  onChange={(e) => setNewCategory(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAddCategory();
-                    }
-                  }}
-                  className="flex-1"
-                />
-                <Button onClick={handleAddCategory} disabled={!newCategory.trim()}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add
-                </Button>
-              </div>
 
-              {/* Category List */}
-              <div className="border rounded-lg divide-y max-h-[400px] overflow-y-auto">
-                {categories.map((category) => (
-                  <div key={category} className="flex items-center justify-between px-3 py-2 hover:bg-muted/50">
-                    {editingCategory === category ? (
-                      <div className="flex-1 flex gap-2">
-                        <Input
-                          value={editCategoryValue}
-                          onChange={(e) => setEditCategoryValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              e.preventDefault();
-                              handleEditCategory(category);
-                            }
-                            if (e.key === 'Escape') {
-                              setEditingCategory(null);
-                              setEditCategoryValue("");
-                            }
-                          }}
-                          className="h-8"
-                          autoFocus
-                        />
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => handleEditCategory(category)}
-                          className="h-8"
-                        >
-                          Save
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditingCategory(null);
-                            setEditCategoryValue("");
-                          }}
-                          className="h-8"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-sm flex-1">{category}</span>
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setEditingCategory(category);
-                              setEditCategoryValue(category);
+          <div className="space-y-4 py-2 overflow-y-auto flex-1 pr-1">
+            {/* Add new top-level category */}
+            <div className="flex gap-2">
+              <Input
+                placeholder="New category name…"
+                value={newCategory}
+                onChange={(e) => setNewCategory(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCategory(); } }}
+                className="flex-1"
+              />
+              <Button onClick={handleAddCategory} disabled={!newCategory.trim()}>
+                <Plus className="h-4 w-4 mr-1" /> Add
+              </Button>
+            </div>
+
+            {/* Category + subcategory tree */}
+            <div className="border rounded-lg divide-y overflow-y-auto max-h-[420px]">
+              {categories.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-6">No categories yet — add one above.</p>
+              )}
+              {categories.map((category) => {
+                const subs = subcategoryMap[category] || [];
+                const isExpanded = expandedCategory === category;
+                return (
+                  <div key={category}>
+                    {/* ── Category row ── */}
+                    <div className="flex items-center gap-1 px-3 py-2 hover:bg-muted/30">
+                      <button
+                        className="p-0.5 rounded hover:bg-muted text-muted-foreground"
+                        onClick={() => setExpandedCategory(isExpanded ? null : category)}
+                        title={isExpanded ? "Collapse" : "Expand subcategories"}
+                      >
+                        {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                      </button>
+
+                      {editingCategory === category ? (
+                        <div className="flex-1 flex gap-1.5">
+                          <Input value={editCategoryValue} onChange={(e) => setEditCategoryValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') { e.preventDefault(); handleEditCategory(category); }
+                              if (e.key === 'Escape') { setEditingCategory(null); setEditCategoryValue(""); }
                             }}
-                            className="h-7 w-7 p-0"
-                          >
-                            <Edit2 className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleDeleteCategory(category)}
-                            className="h-7 w-7 p-0 text-destructive hover:text-destructive"
-                            disabled={categories.length === 1}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
+                            className="h-7 text-sm" autoFocus />
+                          <Button size="sm" variant="ghost" onClick={() => handleEditCategory(category)} className="h-7 text-xs px-2">Save</Button>
+                          <Button size="sm" variant="ghost" onClick={() => { setEditingCategory(null); setEditCategoryValue(""); }} className="h-7 w-7 p-0"><X className="h-3.5 w-3.5" /></Button>
+                        </div>
+                      ) : (
+                        <>
+                          <span className="text-sm font-medium flex-1 cursor-pointer" onClick={() => setExpandedCategory(isExpanded ? null : category)}>
+                            {category}
+                            {subs.length > 0 && <span className="ml-1.5 text-xs text-muted-foreground font-normal">({subs.length} subcategories)</span>}
+                          </span>
+                          <Button size="sm" variant="ghost" onClick={() => { setEditingCategory(category); setEditCategoryValue(category); }} className="h-7 w-7 p-0"><Edit2 className="h-3.5 w-3.5" /></Button>
+                          <Button size="sm" variant="ghost" onClick={() => handleDeleteCategory(category)} className="h-7 w-7 p-0 text-destructive hover:text-destructive" disabled={categories.length === 1}><Trash2 className="h-3.5 w-3.5" /></Button>
+                        </>
+                      )}
+                    </div>
+
+                    {/* ── Subcategories (expanded) ── */}
+                    {isExpanded && (
+                      <div className="bg-muted/20 border-t border-dashed pb-2">
+                        {subs.map((sub) => (
+                          <div key={sub} className="flex items-center gap-1 pl-10 pr-3 py-1.5 hover:bg-muted/40">
+                            <span className="text-muted-foreground mr-1 text-xs">↳</span>
+                            {editingSubcategory?.cat === category && editingSubcategory?.sub === sub ? (
+                              <div className="flex-1 flex gap-1.5">
+                                <Input value={editSubcategoryValue} onChange={(e) => setEditSubcategoryValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') { e.preventDefault(); handleEditSubcategory(category, sub); }
+                                    if (e.key === 'Escape') { setEditingSubcategory(null); setEditSubcategoryValue(""); }
+                                  }}
+                                  className="h-6 text-xs" autoFocus />
+                                <Button size="sm" variant="ghost" onClick={() => handleEditSubcategory(category, sub)} className="h-6 text-xs px-2">Save</Button>
+                                <Button size="sm" variant="ghost" onClick={() => { setEditingSubcategory(null); setEditSubcategoryValue(""); }} className="h-6 w-6 p-0"><X className="h-3 w-3" /></Button>
+                              </div>
+                            ) : (
+                              <>
+                                <span className="text-sm flex-1">{sub}</span>
+                                <Button size="sm" variant="ghost" onClick={() => { setEditingSubcategory({ cat: category, sub }); setEditSubcategoryValue(sub); }} className="h-6 w-6 p-0"><Edit2 className="h-3 w-3" /></Button>
+                                <Button size="sm" variant="ghost" onClick={() => handleDeleteSubcategory(category, sub)} className="h-6 w-6 p-0 text-destructive"><Trash2 className="h-3 w-3" /></Button>
+                              </>
+                            )}
+                          </div>
+                        ))}
+                        {/* Add subcategory input */}
+                        <div className="flex gap-1.5 pl-10 pr-3 pt-1.5">
+                          <Input
+                            placeholder="New subcategory…"
+                            value={isExpanded ? newSubcategory : ""}
+                            onChange={(e) => setNewSubcategory(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddSubcategory(category); } }}
+                            className="h-7 text-xs flex-1"
+                          />
+                          <Button size="sm" onClick={() => handleAddSubcategory(category)} disabled={!newSubcategory.trim()} className="h-7 text-xs px-2">
+                            <Plus className="h-3 w-3 mr-0.5" /> Add
                           </Button>
                         </div>
-                      </>
+                      </div>
                     )}
                   </div>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground mt-2">
-                Categories are used to organize your inventory items. You must have at least one category.
-              </p>
+                );
+              })}
             </div>
+            <p className="text-xs text-muted-foreground">Click the arrow to expand a category and add subcategories. Products can be assigned a category + subcategory for finer filtering.</p>
           </div>
 
           <DialogFooter>
-            <Button onClick={() => setShowSettings(false)}>
-              Close
-            </Button>
+            <Button onClick={() => setShowSettings(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -3134,13 +3371,14 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
               <Label htmlFor="bulkStatus" className="text-sm font-medium">
                 New Status
               </Label>
-              <Select value={bulkStatus} onValueChange={(v) => setBulkStatus(v as "active" | "inactive")}>
+              <Select value={bulkStatus} onValueChange={(v) => setBulkStatus(v as any)}>
                 <SelectTrigger className="mt-1">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="active">Active</SelectItem>
                   <SelectItem value="inactive">Inactive</SelectItem>
+                  <SelectItem value="on_order">On Order</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -3552,6 +3790,334 @@ export function InventoryPage({ onClose }: InventoryPageProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ─── Latest Sold / Removed Tab ───────────────────────────────────────────────
+function LatestSoldTab({ workspaceId, items }: { workspaceId: string; items: InventoryItem[] }) {
+  const [days, setDays] = useState(1);
+  const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    inventoryService.getOutMovementsSince(workspaceId, since)
+      .then(setMovements)
+      .finally(() => setLoading(false));
+  }, [workspaceId, days]);
+
+  // Group by product, sum qty removed
+  const grouped = useMemo(() => {
+    const map = new Map<string, { productId: string; productName: string; totalRemoved: number; lastMovement: Date; currentQty: number; movements: StockMovement[] }>();
+    for (const m of movements) {
+      const key = m.productId || m.productName;
+      const existing = map.get(key);
+      const item = items.find(i => i.id === m.productId);
+      if (existing) {
+        existing.totalRemoved += m.quantity;
+        if (new Date(m.timestamp as any) > existing.lastMovement) existing.lastMovement = new Date(m.timestamp as any);
+        existing.movements.push(m);
+      } else {
+        map.set(key, {
+          productId: m.productId,
+          productName: m.productName,
+          totalRemoved: m.quantity,
+          lastMovement: new Date(m.timestamp as any),
+          currentQty: item?.quantity ?? 0,
+          movements: [m],
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.lastMovement.getTime() - a.lastMovement.getTime());
+  }, [movements, items]);
+
+  return (
+    <div className="h-full flex flex-col">
+      {/* Day filter bar */}
+      <div className="flex items-center gap-2 px-0 py-2 border-b border-border shrink-0">
+        <span className="text-xs text-muted-foreground font-medium">Show last:</span>
+        {[1, 2, 3, 4, 5, 6, 7].map(d => (
+          <button
+            key={d}
+            onClick={() => setDays(d)}
+            className={cn(
+              "px-3 py-1 rounded-full text-xs font-semibold border transition-colors",
+              days === d
+                ? "bg-primary text-primary-foreground border-primary"
+                : "border-border text-muted-foreground hover:border-primary hover:text-foreground"
+            )}
+          >
+            {d} {d === 1 ? "day" : "days"}
+          </button>
+        ))}
+        <span className="ml-2 text-xs text-muted-foreground">Items sold or removed in this window</span>
+      </div>
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto">
+        {loading ? (
+          <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">Loading...</div>
+        ) : grouped.length === 0 ? (
+          <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">No stock removed in the last {days} {days === 1 ? "day" : "days"}.</div>
+        ) : (
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 bg-background z-10">
+              <tr className="border-b border-border text-left">
+                <th className="px-3 py-2 font-medium text-muted-foreground">Product</th>
+                <th className="px-3 py-2 font-medium text-muted-foreground text-right">Qty Removed</th>
+                <th className="px-3 py-2 font-medium text-muted-foreground text-right">Current Stock</th>
+                <th className="px-3 py-2 font-medium text-muted-foreground text-right">Status</th>
+                <th className="px-3 py-2 font-medium text-muted-foreground">Last Movement</th>
+                <th className="px-3 py-2 font-medium text-muted-foreground">Reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              {grouped.map((row) => {
+                const isOut = row.currentQty === 0;
+                const isLow = row.currentQty > 0 && row.currentQty <= 5;
+                return (
+                  <tr key={row.productId || row.productName} className="border-b border-border hover:bg-accent/40 transition-colors">
+                    <td className="px-3 py-2 font-medium">{row.productName}</td>
+                    <td className="px-3 py-2 text-right font-bold text-red-600">-{row.totalRemoved}</td>
+                    <td className={cn("px-3 py-2 text-right font-semibold", isOut ? "text-red-600" : isLow ? "text-amber-600" : "text-green-700")}>
+                      {row.currentQty}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {isOut
+                        ? <Badge variant="destructive">Out of stock</Badge>
+                        : isLow
+                          ? <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100">Low stock</Badge>
+                          : <Badge className="bg-green-100 text-green-800 hover:bg-green-100">In stock</Badge>
+                      }
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground text-xs">
+                      {row.lastMovement.toLocaleDateString()} {row.lastMovement.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground text-xs">
+                      {row.movements.map(m => m.reason).filter(Boolean).join(", ") || "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── To Order Tab ─────────────────────────────────────────────────────────────
+interface OrderLine {
+  id: string;
+  product: string;
+  description: string;
+  supplier: string;
+  qty: number;
+  estimatedCost: number;
+  ordered: boolean;
+}
+
+function ToOrderTab({ workspaceId }: { workspaceId: string }) {
+  const { toast } = useToast();
+  const [lines, setLines] = useState<OrderLine[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const SETTINGS_KEY = "to_order_list";
+
+  useEffect(() => {
+    supabase.from("workspace_settings")
+      .select("data")
+      .eq("workspace_id", workspaceId)
+      .eq("category", SETTINGS_KEY)
+      .single()
+      .then(({ data }) => {
+        if (data?.data && Array.isArray((data.data as any).lines)) {
+          setLines((data.data as any).lines);
+        }
+        setLoading(false);
+      });
+  }, [workspaceId]);
+
+  async function save(updated: OrderLine[]) {
+    setSaving(true);
+    const { error } = await supabase.from("workspace_settings").upsert(
+      { workspace_id: workspaceId, category: SETTINGS_KEY, data: { lines: updated } },
+      { onConflict: "workspace_id,category" }
+    );
+    setSaving(false);
+    if (error) toast({ title: "Save failed", description: error.message, variant: "destructive" });
+  }
+
+  function addLine() {
+    const newLine: OrderLine = { id: crypto.randomUUID(), product: "", description: "", supplier: "", qty: 1, estimatedCost: 0, ordered: false };
+    const updated = [...lines, newLine];
+    setLines(updated);
+    save(updated);
+  }
+
+  function updateLine(id: string, field: keyof OrderLine, value: any) {
+    const updated = lines.map(l => l.id === id ? { ...l, [field]: value } : l);
+    setLines(updated);
+    save(updated);
+  }
+
+  function removeLine(id: string) {
+    const updated = lines.filter(l => l.id !== id);
+    setLines(updated);
+    save(updated);
+  }
+
+  function markAllOrdered() {
+    const updated = lines.map(l => ({ ...l, ordered: true }));
+    setLines(updated);
+    save(updated);
+  }
+
+  function clearOrdered() {
+    const updated = lines.filter(l => !l.ordered);
+    setLines(updated);
+    save(updated);
+  }
+
+  const totalEstimated = lines.filter(l => !l.ordered).reduce((sum, l) => sum + (l.estimatedCost * l.qty), 0);
+  const pendingCount = lines.filter(l => !l.ordered).length;
+
+  if (loading) return <div className="flex items-center justify-center h-40 text-muted-foreground text-sm">Loading...</div>;
+
+  return (
+    <div className="h-full flex flex-col gap-3">
+      {/* Toolbar */}
+      <div className="flex items-center gap-2 flex-wrap shrink-0">
+        <Button size="sm" onClick={addLine} className="gap-1.5">
+          <span className="text-base leading-none">+</span> Add Item
+        </Button>
+        {lines.some(l => !l.ordered) && (
+          <Button size="sm" variant="outline" onClick={markAllOrdered}>Mark all ordered</Button>
+        )}
+        {lines.some(l => l.ordered) && (
+          <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={clearOrdered}>Clear ordered</Button>
+        )}
+        {saving && <span className="text-xs text-muted-foreground">Saving…</span>}
+        <div className="ml-auto text-sm text-muted-foreground">
+          {pendingCount} item{pendingCount !== 1 ? "s" : ""} to order
+          {totalEstimated > 0 && <span className="ml-3 font-semibold text-foreground">Est. total: R{totalEstimated.toFixed(2)}</span>}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto rounded-lg border border-border">
+        {lines.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-40 text-muted-foreground text-sm gap-2">
+            <span>No items on the order list yet.</span>
+            <Button size="sm" variant="outline" onClick={addLine}>+ Add first item</Button>
+          </div>
+        ) : (
+          <table className="w-full text-sm border-collapse">
+            <thead className="sticky top-0 bg-background z-10 border-b border-border">
+              <tr>
+                <th className="px-3 py-2 text-left font-medium text-muted-foreground w-8"></th>
+                <th className="px-3 py-2 text-left font-medium text-muted-foreground">Product / Model</th>
+                <th className="px-3 py-2 text-left font-medium text-muted-foreground">Description</th>
+                <th className="px-3 py-2 text-left font-medium text-muted-foreground">Supplier</th>
+                <th className="px-3 py-2 text-right font-medium text-muted-foreground w-20">Qty</th>
+                <th className="px-3 py-2 text-right font-medium text-muted-foreground w-32">Est. Cost (each)</th>
+                <th className="px-3 py-2 text-right font-medium text-muted-foreground w-28">Est. Total</th>
+                <th className="px-3 py-2 w-8"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((line) => (
+                <tr key={line.id} className={cn("border-b border-border transition-colors", line.ordered ? "opacity-50 bg-muted/30" : "hover:bg-accent/30")}>
+                  {/* Ordered checkbox */}
+                  <td className="px-3 py-1.5 text-center">
+                    <input
+                      type="checkbox"
+                      checked={line.ordered}
+                      onChange={(e) => updateLine(line.id, "ordered", e.target.checked)}
+                      className="h-4 w-4 accent-primary cursor-pointer"
+                      title="Mark as ordered"
+                    />
+                  </td>
+                  {/* Product */}
+                  <td className="px-2 py-1">
+                    <input
+                      type="text"
+                      value={line.product}
+                      onChange={(e) => updateLine(line.id, "product", e.target.value)}
+                      placeholder="Product / model…"
+                      className={cn("w-full bg-transparent border-none outline-none text-sm px-1 py-0.5 rounded focus:ring-1 focus:ring-primary", line.ordered && "line-through text-muted-foreground")}
+                    />
+                  </td>
+                  {/* Description */}
+                  <td className="px-2 py-1">
+                    <input
+                      type="text"
+                      value={line.description}
+                      onChange={(e) => updateLine(line.id, "description", e.target.value)}
+                      placeholder="Description…"
+                      className="w-full bg-transparent border-none outline-none text-sm px-1 py-0.5 rounded focus:ring-1 focus:ring-primary text-muted-foreground"
+                    />
+                  </td>
+                  {/* Supplier */}
+                  <td className="px-2 py-1">
+                    <input
+                      type="text"
+                      value={line.supplier}
+                      onChange={(e) => updateLine(line.id, "supplier", e.target.value)}
+                      placeholder="Supplier / company…"
+                      className="w-full bg-transparent border-none outline-none text-sm px-1 py-0.5 rounded focus:ring-1 focus:ring-primary text-muted-foreground"
+                    />
+                  </td>
+                  {/* Qty */}
+                  <td className="px-2 py-1">
+                    <input
+                      type="number"
+                      min={1}
+                      value={line.qty}
+                      onChange={(e) => updateLine(line.id, "qty", parseInt(e.target.value) || 1)}
+                      className="w-full bg-transparent border-none outline-none text-sm px-1 py-0.5 rounded focus:ring-1 focus:ring-primary text-right font-semibold"
+                    />
+                  </td>
+                  {/* Est cost each */}
+                  <td className="px-2 py-1">
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={line.estimatedCost}
+                      onChange={(e) => updateLine(line.id, "estimatedCost", parseFloat(e.target.value) || 0)}
+                      className="w-full bg-transparent border-none outline-none text-sm px-1 py-0.5 rounded focus:ring-1 focus:ring-primary text-right"
+                    />
+                  </td>
+                  {/* Est total */}
+                  <td className="px-3 py-1.5 text-right font-semibold text-sm">
+                    {line.estimatedCost > 0 ? `R${(line.estimatedCost * line.qty).toFixed(2)}` : "—"}
+                  </td>
+                  {/* Delete */}
+                  <td className="px-2 py-1 text-center">
+                    <button onClick={() => removeLine(line.id)} className="text-muted-foreground hover:text-red-500 transition-colors" title="Remove">
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            {lines.length > 1 && totalEstimated > 0 && (
+              <tfoot className="border-t-2 border-border">
+                <tr>
+                  <td colSpan={6} className="px-3 py-2 text-right text-sm font-semibold">Estimated Total (pending):</td>
+                  <td className="px-3 py-2 text-right font-bold text-base">R{totalEstimated.toFixed(2)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        )}
+      </div>
     </div>
   );
 }

@@ -42,8 +42,8 @@ import { StatusManager } from "@/components/crm/StatusManager";
 import { StatusSelectionDialog } from "@/components/crm/StatusSelectionDialog";
 import { PermissionManager } from "@/components/crm/PermissionManager";
 import { useWarningCheck, type WarningRule } from "@/components/crm/WarningRulesPanel";
-import { StaleTaskBlockDialog, StaleTaskAcknowledgeDialog } from "@/components/crm/StaleTaskWarningDialog";
-import { checkBlockNewInStaleList, findStaleTasks, type StaleTaskHit } from "@/lib/staleTaskService";
+import { StaleTaskBlockDialog, StaleTaskAcknowledgeDialog, InvoicedTaskWarningDialog } from "@/components/crm/StaleTaskWarningDialog";
+import { checkBlockNewInStaleList, findStaleTasks, checkInvoicedTasksInStorage, type StaleTaskHit, type InvoicedTaskHit } from "@/lib/staleTaskService";
 import { AIBotWarningDialog } from "@/components/crm/AIBotWarningDialog";
 import { SRAgentPanel } from "@/components/ai/SRAgentPanel";
 import { FloatingAIBubble } from "@/components/ai/FloatingAIBubble";
@@ -54,6 +54,7 @@ import { QuotationCreationPage } from "@/pages/QuotationCreationPage";
 import { AccountsPage } from "@/pages/Accounts";
 import { InventoryPage } from "@/pages/InventoryPage";
 import { WalkInSalePage } from "@/pages/WalkInSalePage";
+import { JobCardSparesPage } from "@/pages/JobCardSparesPage";
 import { EmailPage } from "@/pages/EmailPage";
 import { getUnreadCount } from "@/lib/emailAccountService";
 import StockMovementsPage from "@/pages/StockMovementsPage";
@@ -83,6 +84,8 @@ import { InvoiceRegisterPage } from "@/pages/InvoiceRegisterPage";
 // import { ExpenseSlipsPage } from "@/pages/ExpenseSlipsPage"; // disabled — file missing on this machine
 import { InventoryRegisterPage } from "@/pages/InventoryRegisterPage";
 import { BankingMatchingPage } from "@/pages/BankingMatchingPage";
+import { BankingStatementPage } from "@/pages/BankingStatementPage";
+import { ChartOfAccountsPage } from "@/pages/ChartOfAccountsPage";
 import { SpaceOverview } from "@/components/crm/SpaceOverview";
 import { FolderOverview } from "@/components/crm/FolderOverview";
 import { useAuth } from "@/contexts/AuthContext";
@@ -362,11 +365,37 @@ export default function Index() {
           workspace.tasks,
           workspace.lists,
           allWarningRules,
-          { trigger: "on_load" },
+          { trigger: "on_load", currentUserId: user?.uid },
         );
         if (hits.length > 0) setStaleAckHits(hits);
       } catch (err) {
         console.error("[stale sweep] failed:", err);
+      }
+    })();
+  }, [workspaceId, allWarningRules, workspace.tasks, workspace.lists]);
+
+  // Invoice-collected warning dialog
+  const [invoicedTaskHits, setInvoicedTaskHits] = useState<InvoicedTaskHit[]>([]);
+  const invoiceSweepDoneRef = useRef(false);
+  useEffect(() => {
+    if (invoiceSweepDoneRef.current) return;
+    if (!workspaceId) return;
+    if (allWarningRules.length === 0) return;
+    if (workspace.tasks.length === 0) return;
+    invoiceSweepDoneRef.current = true;
+
+    (async () => {
+      try {
+        const hits = await checkInvoicedTasksInStorage(
+          workspaceId,
+          workspace.tasks,
+          workspace.lists,
+          allWarningRules,
+          user?.uid,
+        );
+        if (hits.length > 0) setInvoicedTaskHits(hits);
+      } catch (err) {
+        console.error("[invoice sweep] failed:", err);
       }
     })();
   }, [workspaceId, allWarningRules, workspace.tasks, workspace.lists]);
@@ -400,12 +429,17 @@ export default function Index() {
   const [showInvoiceRegister, setShowInvoiceRegister] = useState(false);
   const [showInventoryRegister, setShowInventoryRegister] = useState(false);
   const [showBanking, setShowBanking] = useState(false);
+  const [showBankingStatement, setShowBankingStatement] = useState(false);
+  const [showChartOfAccounts, setShowChartOfAccounts] = useState(false);
   const [showBusinessPlanning, setShowBusinessPlanning] = useState(false);
   const [showEcommerceOperations, setShowEcommerceOperations] = useState(false);
+  const [ecommerceInitialOrder, setEcommerceInitialOrder] = useState<string | undefined>();
   const [showEcommerceAnalytics, setShowEcommerceAnalytics] = useState(false);
+  const [inventoryInitialSearch, setInventoryInitialSearch] = useState<string | undefined>();
   const [showExpenseSlips, setShowExpenseSlips] = useState(false);
   const [expenseSlipInitialAction, setExpenseSlipInitialAction] = useState<"camera" | "upload" | undefined>();
   const [showWalkInSale, setShowWalkInSale] = useState(false);
+  const [showJobCardSpares, setShowJobCardSpares] = useState(false);
   const [showSpaceOverview, setShowSpaceOverview] = useState<string | null>(null);
   const [showFolderOverview, setShowFolderOverview] = useState<string | null>(null);
   const [showSalesSettings, setShowSalesSettings] = useState(false);
@@ -596,8 +630,11 @@ export default function Index() {
     setShowInvoiceRegister(false);
     setShowInventoryRegister(false);
     setShowBanking(false);
+    setShowBankingStatement(false);
+    setShowChartOfAccounts(false);
     setShowBusinessPlanning(false);
     setShowEcommerceOperations(false);
+    setShowEcommerceAnalytics(false);
     setShowExpenseSlips(false);
     setShowInvoiceFromTask(false);
     setShowEmail(false);
@@ -608,6 +645,7 @@ export default function Index() {
     setShowStaffDashboard(false);
     setShowDataSheets(false);
     setShowWalkInSale(false);
+    setShowJobCardSpares(false);
     // Always close the task detail panel when leaving CRM context
     setSelectedTask(null);
   };
@@ -623,7 +661,7 @@ export default function Index() {
       setShowBusinessOverview(false); setShowTechAssessment(false); setShowOutstandingRepairs(false);
       setShowTaskCreationList(false); setShowSalesOverview(false); setShowInventoryOverview(false);
       setShowInvoiceRegister(false); setShowInventoryRegister(false); setShowBanking(false);
-      setShowBusinessPlanning(false); setShowEcommerceOperations(false); setShowExpenseSlips(false);
+      setShowBusinessPlanning(false); setShowEcommerceOperations(false); setShowEcommerceAnalytics(false); setShowExpenseSlips(false);
       setShowInvoiceFromTask(false); setShowEmail(false); setShowActivityReports(false); setShowDataSheets(false);
       if (target === "inventory")          setShowInventory(true);
       else if (target === "invoicing")     setShowInvoicing(true);
@@ -894,8 +932,9 @@ export default function Index() {
         setMemCachedWorkspace(workspaceId, cleanState);
         setCachedWorkspace(workspaceId, cleanState);
         console.log('[Workspace Load] Workspace set successfully');
-        // Run date-based automations on load (deferred so React state flushes first)
+        // Run date-based and enforced automations on load (deferred so React state flushes first)
         setTimeout(runDateAutomations, 500);
+        setTimeout(runEnforcedAutomations, 700);
 
         // Morning briefing — show once per login session (sessionStorage clears on browser close, survives refresh)
         if (user?.uid) {
@@ -1017,7 +1056,7 @@ export default function Index() {
       } catch {
         // silently ignore poll errors
       }
-    }, 60_000);
+    }, 5 * 60_000);
 
     // ─── Visibility-change refresh ────────────────────────────────────────
     // When the user switches back to the tab after being away, reconcile tasks only
@@ -1803,7 +1842,7 @@ export default function Index() {
 
     // Hard-block: an existing task in this list/folder has gone stale per a
     // warning rule. Reception must handle that one before adding new work.
-    const stale = checkBlockNewInStaleList(selectedListId, workspace.tasks, workspace.lists, allWarningRules);
+    const stale = checkBlockNewInStaleList(selectedListId, workspace.tasks, workspace.lists, allWarningRules, user?.uid);
     if (stale) {
       const daysOld = Math.floor(
         (Date.now() - new Date(stale.offender.createdAt || 0).getTime()) / 86400000,
@@ -2049,6 +2088,7 @@ export default function Index() {
           newValue: toName,
           text: `moved task from ${fromName} to ${toName}`,
         });
+        taskWithActivity = { ...taskWithActivity, listEnteredAt: now };
       }
       // Due date
       const prevDue = previousTask.dueDate ?? '';
@@ -2430,12 +2470,76 @@ export default function Index() {
     }
   }, [updateWorkspace, persistTasks]);
 
+  // Sweep all task_always_in_list (enforced) automations — run on load and every 5 min.
+  // These must fire even when tasks arrive via realtime from other users, so a periodic
+  // sweep is the only reliable way to enforce them without waiting for a manual save.
+  const runEnforcedAutomations = useCallback(() => {
+    const current = workspaceRef.current;
+    if (!current.tasks.length) return;
+    const now = new Date().toISOString();
+    let tasks = current.tasks;
+    let changed = false;
+
+    for (const list of current.lists) {
+      for (const auto of list.automations ?? []) {
+        if (!auto.enabled || auto.trigger.type !== 'task_always_in_list') continue;
+        const targetListId = auto.trigger.targetListId;
+        if (!targetListId) continue;
+        tasks = tasks.map(task => {
+          if (task.archived || task.listId !== targetListId) return task;
+          let updated = task;
+          switch (auto.action.type) {
+            case 'set_status':
+              if (auto.action.status && task.status !== auto.action.status)
+                updated = { ...task, status: auto.action.status as TaskStatus };
+              break;
+            case 'assign_members':
+              if (auto.action.assigneeUids?.length && JSON.stringify(task.assignees) !== JSON.stringify(auto.action.assigneeUids))
+                updated = { ...task, assignees: auto.action.assigneeUids, assignee: auto.action.assigneeUids[0] };
+              break;
+            case 'unassign_members': {
+              const toRemove = auto.action.assigneeUids ?? [];
+              const remaining = toRemove.length ? (task.assignees ?? []).filter((u: string) => !toRemove.includes(u)) : [];
+              if (JSON.stringify(task.assignees) !== JSON.stringify(remaining))
+                updated = { ...task, assignees: remaining, assignee: remaining[0] ?? null };
+              break;
+            }
+            case 'set_priority':
+              if (auto.action.priority && task.priority !== auto.action.priority)
+                updated = { ...task, priority: auto.action.priority as TaskPriority };
+              break;
+            case 'flag_task':
+              if (!task.adminFlag?.flagged)
+                updated = { ...task, adminFlag: { flagged: true, reason: auto.action.flagReason || '', flaggedBy: 'automation', flaggedAt: now } };
+              break;
+          }
+          if (updated !== task) changed = true;
+          return updated;
+        });
+      }
+    }
+
+    if (changed) {
+      const changedTasks = tasks.filter((t, i) => t !== current.tasks[i]);
+      updateWorkspace({ ...current, tasks });
+      persistTasks(changedTasks);
+    }
+  }, [updateWorkspace, persistTasks]);
+
   // Run date automations on load and then every 5 minutes
   useEffect(() => {
     if (!workspaceId) return;
     const timer = setInterval(runDateAutomations, 5 * 60 * 1000);
     return () => clearInterval(timer);
   }, [workspaceId, runDateAutomations]);
+
+  // Run enforced (task_always_in_list) automations every 5 minutes so tasks
+  // that arrive via realtime subscription get automated without a manual save.
+  useEffect(() => {
+    if (!workspaceId) return;
+    const timer = setInterval(runEnforcedAutomations, 5 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [workspaceId, runEnforcedAutomations]);
 
   // Navigate to the task's list and open it (used by search results & 3-dot menus)
   const handleOpenTask = useCallback((task: Task) => {
@@ -2875,8 +2979,9 @@ export default function Index() {
     const targetList = workspace.lists.find(l => l.id === targetListId);
     const targetStatuses = targetList?.customStatuses?.length ? targetList.customStatuses : DEFAULT_STATUSES;
     const firstStatus = targetStatuses[0]?.id || 'to_do';
-    const movedTasks = selectedTasks.map(t => ({ ...t, listId: targetListId, status: firstStatus as TaskStatus }));
-    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, listId: targetListId, status: firstStatus as TaskStatus } : t) });
+    const now = new Date().toISOString();
+    const movedTasks = selectedTasks.map(t => ({ ...t, listId: targetListId, status: firstStatus as TaskStatus, listEnteredAt: now }));
+    updateWorkspace({ ...workspace, tasks: workspace.tasks.map(t => ids.includes(t.id) ? { ...t, listId: targetListId, status: firstStatus as TaskStatus, listEnteredAt: now } : t) });
     persistTasks(movedTasks);
     setSelectedTaskIds(new Set());
   }, [selectedTaskIds, workspace, toast, persistTasks]);
@@ -3108,10 +3213,13 @@ export default function Index() {
           onOpenExpenseSlips={() => { closeAllOverlays(); setShowExpenseSlips(true); }}
           onOpenInventoryRegister={() => { closeAllOverlays(); setShowInventoryRegister(true); }}
           onOpenBanking={() => { closeAllOverlays(); setShowBanking(true); }}
+          onOpenBankingStatement={() => { closeAllOverlays(); setShowBankingStatement(true); }}
+          onOpenChartOfAccounts={() => { closeAllOverlays(); setShowChartOfAccounts(true); }}
           onOpenBusinessPlanning={() => { closeAllOverlays(); setShowBusinessPlanning(true); }}
-          onOpenEcommerceOperations={() => { closeAllOverlays(); setShowEcommerceOperations(true); }}
+          onOpenEcommerceOperations={(orderNumber) => { closeAllOverlays(); setEcommerceInitialOrder(orderNumber); setShowEcommerceOperations(true); }}
           onOpenEcommerceAnalytics={() => { closeAllOverlays(); setShowEcommerceAnalytics(true); }}
           onOpenWalkInSale={() => { closeAllOverlays(); setShowWalkInSale(true); }}
+          onOpenJobCardSpares={() => { closeAllOverlays(); setShowJobCardSpares(true); }}
           onCaptureExpenseSlip={() => { closeAllOverlays(); setExpenseSlipInitialAction('camera'); setShowExpenseSlips(true); }}
           onDropTask={handleMoveTask}
           onOpenSalesSettings={() => setShowSalesSettings(true)}
@@ -3437,6 +3545,7 @@ export default function Index() {
                         onDuplicateTask={handleDuplicateTask}
                         onEditTask={(task) => handleOpenTask(task)}
                         onMoveTask={(task) => handleOpenTask(task)}
+                        onDirectMoveTask={(taskId, listId) => handleMoveTask(taskId, listId)}
                         selectedTaskIds={selectedTaskIds}
                         onToggleSelect={handleToggleSelect}
                         onSelectAllInStatus={handleSelectAllInStatus}
@@ -3445,7 +3554,16 @@ export default function Index() {
                         onBulkStatusChange={handleBulkStatusChange}
                         onBulkMoveToList={handleBulkMoveToList}
                         onClearSelection={handleClearSelection}
-                        availableLists={workspace.lists.filter(l => l.id !== selectedListId).map(l => ({ id: l.id, name: l.name }))}
+                        availableLists={workspace.lists.filter(l => l.id !== selectedListId).map(l => {
+                          const parentLabel = l.parentType === "space"
+                            ? (workspace.spaces.find(s => s.id === l.parentId)?.name ?? "")
+                            : (() => {
+                                const folder = workspace.folders.find(f => f.id === l.parentId);
+                                const space = folder ? workspace.spaces.find(s => s.id === folder.spaceId) : null;
+                                return [space?.name, folder?.name].filter(Boolean).join(" › ");
+                              })();
+                          return { id: l.id, name: l.name, parentLabel };
+                        })}
                         archivedTasks={workspace.tasks.filter(t => t.listId === selectedListId && !!t.archived)}
                         onArchiveTask={handleArchiveTask}
                         onUnarchiveTask={handleUnarchiveTask}
@@ -3487,6 +3605,8 @@ export default function Index() {
                     visibleFields={taskVisibleFields}
                     allFields={workspace.customFields}
                     allLists={workspace.lists}
+                    allSpaces={workspace.spaces}
+                    allFolders={workspace.folders}
                     forms={workspace.forms}
                     onUpdate={handleUpdateTask}
                     onMoveTask={handleMoveTask}
@@ -3507,10 +3627,16 @@ export default function Index() {
             <EmailPage onClose={() => setShowEmail(false)} onUnreadCountChange={setEmailUnreadCount} />
           )}
           {showInventory && (
-            <InventoryPage onClose={() => setShowInventory(false)} />
+            <InventoryPage
+              onClose={() => { setShowInventory(false); setInventoryInitialSearch(undefined); }}
+              initialSearch={inventoryInitialSearch}
+            />
           )}
           {showWalkInSale && (
             <WalkInSalePage onClose={() => setShowWalkInSale(false)} />
+          )}
+          {showJobCardSpares && (
+            <JobCardSparesPage onClose={() => setShowJobCardSpares(false)} />
           )}
           {showStockMovements && (
             <div className="absolute inset-0 z-30 bg-background overflow-y-auto">
@@ -3645,6 +3771,12 @@ export default function Index() {
           {showBanking && (
             <BankingMatchingPage onClose={() => setShowBanking(false)} />
           )}
+          {showBankingStatement && (
+            <BankingStatementPage onClose={() => setShowBankingStatement(false)} />
+          )}
+          {showChartOfAccounts && (
+            <ChartOfAccountsPage onClose={() => setShowChartOfAccounts(false)} />
+          )}
           {showBusinessPlanning && (
             <BusinessPlanningPage
               onClose={() => setShowBusinessPlanning(false)}
@@ -3657,10 +3789,17 @@ export default function Index() {
             />
           )}
           {showEcommerceOperations && (
-            <EcommerceOrdersPage onClose={() => setShowEcommerceOperations(false)} />
+            <EcommerceOrdersPage onClose={() => { setShowEcommerceOperations(false); setEcommerceInitialOrder(undefined); }} initialOrderNumber={ecommerceInitialOrder} />
           )}
           {showEcommerceAnalytics && (
-            <EcommerceAnalyticsPage onClose={() => setShowEcommerceAnalytics(false)} />
+            <EcommerceAnalyticsPage
+              onClose={() => setShowEcommerceAnalytics(false)}
+              onNavigateToProduct={(query) => {
+                setShowEcommerceAnalytics(false);
+                setInventoryInitialSearch(query);
+                setShowInventory(true);
+              }}
+            />
           )}
           {/* showExpenseSlips && (
             <ExpenseSlipsPage
@@ -3739,6 +3878,18 @@ export default function Index() {
             hits={staleAckHits}
           />
         )}
+
+        {/* Invoice collected — Rule C: unit still in storage */}
+        {invoicedTaskHits.length > 0 && staleAckHits.length === 0 && (
+          <InvoicedTaskWarningDialog
+            open={invoicedTaskHits.length > 0}
+            onClose={() => setInvoicedTaskHits([])}
+            workspaceId={workspaceId || ""}
+            userId={user?.uid || ""}
+            userName={user?.displayName || user?.email || "User"}
+            hits={invoicedTaskHits}
+          />
+        )}
         <SRAgentPanel
           open={showAIAssistant}
           onOpenChange={setShowAIAssistant}
@@ -3781,6 +3932,8 @@ export default function Index() {
             visibleFields={taskVisibleFields}
             allFields={workspace.customFields}
             allLists={workspace.lists}
+            allSpaces={workspace.spaces}
+            allFolders={workspace.folders}
             forms={workspace.forms}
             onUpdate={handleUpdateTask}
             onMoveTask={handleMoveTask}

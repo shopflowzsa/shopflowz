@@ -3,6 +3,45 @@
  * Handles products, categories, variants, and inventory
  */
 
+// ─── Public inventory row cache ───────────────────────────────────────────────
+// Shared by getPublicProducts + getPublicCategories so we only hit Supabase
+// once per 5-minute window instead of twice per page load.
+const _invRowCache = new Map<string, { ts: number; rows: any[] }>();
+const INV_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const LS_PREFIX = 'pub_inv_v1_';
+
+function _getInvCache(workspaceId: string): any[] | null {
+  // 1. Module memory (fastest — same tab session)
+  const mem = _invRowCache.get(workspaceId);
+  if (mem && Date.now() - mem.ts < INV_CACHE_TTL) return mem.rows;
+  // 2. localStorage (survives page refresh)
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + workspaceId);
+    if (raw) {
+      const { ts, rows } = JSON.parse(raw);
+      if (Date.now() - ts < INV_CACHE_TTL) {
+        _invRowCache.set(workspaceId, { ts, rows });
+        return rows;
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function _setInvCache(workspaceId: string, rows: any[]) {
+  const ts = Date.now();
+  _invRowCache.set(workspaceId, { ts, rows });
+  try {
+    localStorage.setItem(LS_PREFIX + workspaceId, JSON.stringify({ ts, rows }));
+  } catch { /* storage full — memory cache still works */ }
+}
+
+/** Call this after saving inventory changes so the store reflects them immediately. */
+export function bustPublicProductCache(workspaceId: string) {
+  _invRowCache.delete(workspaceId);
+  try { localStorage.removeItem(LS_PREFIX + workspaceId); } catch { /* ignore */ }
+}
+
 /**
  * Injects Cloudinary transformations into a Cloudinary image URL so every
  * product image shown in the public store has a clean white background,
@@ -156,7 +195,7 @@ export async function getProducts(
     }],
     isActive: item.status === 'active',
     isFeatured: false,
-    brand: (item.supplier as string) || undefined,
+    brand: (item.manufacturer as string) || undefined,
     tags: [],
     createdAt: (item.createdAt as string) || new Date().toISOString(),
     updatedAt: (item.updatedAt as string) || new Date().toISOString(),
@@ -261,38 +300,39 @@ export async function getPublicProducts(
     limit?: number;
   } = {}
 ): Promise<{ products: PublicProduct[]; totalCount: number; }> {
-  let rows: any[] | null = null;
-  try {
-    // Filter active items with a price at the DB level — avoids fetching the full
-    // inventory table and sending unused rows over the wire (reduces Supabase egress).
-    const { data } = await supabaseServiceRole
-      .from('inventory')
-      .select('id,data,updated_at')
-      .eq('workspace_id', workspaceId)
-      .eq('data->>status', 'active')
-      .or('data->>price.gt.0,data->>unitPrice.gt.0')
-      .order('updated_at', { ascending: false })
-      .limit(2000);
-    rows = data;
-  } catch (e) {
-    console.error('[getPublicProducts] fetch error:', e);
-    // Fallback: fetch all and filter in JS if the filtered query fails
+  let rows: any[] | null = _getInvCache(workspaceId);
+  if (!rows) {
     try {
       const { data } = await supabaseServiceRole
         .from('inventory')
         .select('id,data,updated_at')
         .eq('workspace_id', workspaceId)
+        .in('data->>status', ['active', 'on_order'])
+        .or('data->>price.gt.0,data->>unitPrice.gt.0')
         .order('updated_at', { ascending: false })
         .limit(2000);
-      rows = data;
-    } catch (e2) { console.error('[getPublicProducts] fallback fetch error:', e2); }
+      rows = data ?? [];
+      _setInvCache(workspaceId, rows);
+    } catch (e) {
+      console.error('[getPublicProducts] fetch error:', e);
+      try {
+        const { data } = await supabaseServiceRole
+          .from('inventory')
+          .select('id,data,updated_at')
+          .eq('workspace_id', workspaceId)
+          .order('updated_at', { ascending: false })
+          .limit(2000);
+        rows = data ?? [];
+        _setInvCache(workspaceId, rows);
+      } catch (e2) { console.error('[getPublicProducts] fallback fetch error:', e2); }
+    }
   }
 
   let items: any[] = (rows || []).map(r => ({ id: r.id, ...(r.data as Record<string, any>) }));
 
-  // Only show active items that have a sellable price.
+  // Show active and on_order items that have a sellable price.
   // Use || not ?? so that price:0 falls through to unitPrice (items edited via both inventory services).
-  items = items.filter(item => item.status === 'active' && Number(item.price || item.unitPrice || 0) > 0);
+  items = items.filter(item => (item.status === 'active' || item.status === 'on_order') && Number(item.price || item.unitPrice || 0) > 0);
 
   // Apply filters
   if (options.categoryId) {
@@ -330,6 +370,8 @@ export async function getPublicProducts(
     const namedVariants = item.productVariants as Array<{ id: string; name: string; price?: number; stock: number; sku?: string; }> | undefined;
     const hasNamedVariants = Array.isArray(namedVariants) && namedVariants.length > 0;
 
+    const isOnOrder = item.status === 'on_order';
+
     const variants = hasNamedVariants
       ? namedVariants!.map(v => ({
           id: v.id || `v_${v.name}`,
@@ -338,7 +380,7 @@ export async function getPublicProducts(
           price: Number(v.price ?? regularPrice),
           compareAtPrice: undefined,
           salePrice: undefined,
-          inStock: Number(v.stock ?? 0) > 0,
+          inStock: isOnOrder ? true : Number(v.stock ?? 0) > 0,
           attributes: [],
           packSize: undefined,
           packPrice: undefined,
@@ -350,7 +392,7 @@ export async function getPublicProducts(
           price: saleActive ? rawSale : regularPrice,
           compareAtPrice: saleActive ? regularPrice : undefined,
           salePrice: saleActive ? rawSale : undefined,
-          inStock: (() => {
+          inStock: isOnOrder ? true : (() => {
             const qty = (item.quantity !== undefined && item.quantity !== null)
               ? item.quantity
               : (item.currentStock !== undefined && item.currentStock !== null)
@@ -374,12 +416,18 @@ export async function getPublicProducts(
       shortDescription: (item.description as string) || '',
       images,
       variants,
-      brand: (item.supplier as string) || undefined,
+      brand: (item.manufacturer as string) || undefined,
       category: (item.category as string) || '',
+      subcategory: (item.subcategory as string) || undefined,
+      voltageRange: (item.voltageRange as string) || undefined,
+      amperageRange: (item.amperageRange as string) || undefined,
+      rdson: (item.rdson as string) || undefined,
+      vbe: (item.vbe as string) || undefined,
       tags: [],
       quantityInStock,
       averageRating: undefined,
       reviewCount: undefined,
+      status: item.status as string,
     };
   });
 
@@ -390,34 +438,63 @@ export async function getPublicProducts(
 }
 
 export async function getPublicCategories(workspaceId: string): Promise<PublicCategory[]> {
-  let rows: any[] | null = null;
+  let rows: any[] | null = _getInvCache(workspaceId);
+  let subcategoryMap: Record<string, string[]> = {};
   try {
-    // Only fetch active+priced items and only the category field to minimise egress
-    const { data } = await supabaseServiceRole
-      .from('inventory')
-      .select('data->category,data->price,data->unitPrice')
-      .eq('workspace_id', workspaceId)
-      .eq('data->>status', 'active')
-      .limit(2000);
-    rows = data;
+    const [fetchedRows, settingsRes] = await Promise.all([
+      rows ? Promise.resolve(rows) : supabaseServiceRole
+        .from('inventory')
+        .select('id,data,updated_at')
+        .eq('workspace_id', workspaceId)
+        .in('data->>status', ['active', 'on_order'])
+        .order('updated_at', { ascending: false })
+        .limit(2000)
+        .then(r => { if (r.data) _setInvCache(workspaceId, r.data); return r.data ?? []; }),
+      supabaseServiceRole
+        .from('workspace_settings')
+        .select('data')
+        .eq('workspace_id', workspaceId)
+        .eq('category', 'inventory')
+        .single(),
+    ]);
+    rows = Array.isArray(fetchedRows) ? fetchedRows : (fetchedRows as any)?.data ?? [];
+    subcategoryMap = (settingsRes.data?.data as any)?.subcategories || {};
   } catch (e) {
     console.error('[getPublicCategories] fetch error:', e);
     return [];
   }
 
   const categoryMap = new Map<string, number>();
+  const subcategoryCountMap = new Map<string, Map<string, number>>();
   (rows || []).forEach(r => {
-    const d = r as Record<string, any>;
+    // Rows may come from cache (full inventory row: { id, data: {...} })
+    // or from the old flat JSONB-path query — handle both.
+    const d = ((r as any).data || r) as Record<string, any>;
     if (Number(d.price || d.unitPrice || 0) <= 0) return;
     const cat = (d.category as string) || '';
-    if (cat) categoryMap.set(cat, (categoryMap.get(cat) || 0) + 1);
+    if (!cat) return;
+    categoryMap.set(cat, (categoryMap.get(cat) || 0) + 1);
+    const sub = (d.subcategory as string) || '';
+    if (sub) {
+      if (!subcategoryCountMap.has(cat)) subcategoryCountMap.set(cat, new Map());
+      const subMap = subcategoryCountMap.get(cat)!;
+      subMap.set(sub, (subMap.get(sub) || 0) + 1);
+    }
   });
 
-  return Array.from(categoryMap.entries()).map(([name, count]) => ({
-    id: name,
-    name,
-    productCount: count,
-  }));
+  return Array.from(categoryMap.entries()).map(([name, count]) => {
+    const subNames = subcategoryMap[name] || [];
+    const subCounts = subcategoryCountMap.get(name);
+    const subcategories: PublicCategory[] = subNames
+      .filter(s => subCounts?.has(s))
+      .map(s => ({ id: s, name: s, productCount: subCounts?.get(s) || 0 }));
+    return {
+      id: name,
+      name,
+      productCount: count,
+      subcategories: subcategories.length > 0 ? subcategories : undefined,
+    };
+  });
 }
 
 // ─── Helper Functions ────────────────────────────────────────────────────

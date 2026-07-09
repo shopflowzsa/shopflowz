@@ -35,8 +35,10 @@ export async function createOrder(
 ): Promise<string> {
   const orderNumber = await generateOrderNumber(workspaceId);
   const subtotal = orderData.items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  const taxAmount = subtotal * 0.10;
-  const shippingCost = calculateShippingCost(subtotal, orderData.shippingAddress);
+  const isWalkIn = orderData.source === 'walk_in';
+  // Walk-in counter sales: no shipping, no tax (prices are already VAT-inclusive)
+  const taxAmount = isWalkIn ? 0 : 0;
+  const shippingCost = isWalkIn ? 0 : calculateShippingCost(subtotal, orderData.shippingAddress);
   const totalAmount = subtotal + taxAmount + shippingCost;
   const orderItems: OrderItem[] = orderData.items.map(item => ({
     productId: item.productId, variantId: item.variantId, productName: item.productName,
@@ -69,7 +71,7 @@ export async function createOrder(
       type: 'order' as const,
       title: `${isWalkIn ? 'Walk-in sale' : 'New order'} ${orderNumber}`,
       body: `R${totalAmount.toFixed(2)} from ${who}${paid ? ' · paid' : ' · awaiting payment'}`,
-      link: 'ecommerce',
+      link: `ecommerce:${orderNumber}`,
     };
     await Promise.all([
       addNotification(workspaceId, notif),
@@ -231,19 +233,11 @@ export function calculateCartTotals(items: CartItem[]): {
   return { subtotal, itemCount };
 }
 
-export function calculateShippingCost(subtotal: number, address: ShippingAddress): number {
-  // Simple shipping calculation (make this configurable)
-  if (subtotal >= 500) return 0; // Free shipping over 500 QAR
-  
-  // Different rates by region
-  const shippingRates = {
-    'Doha': 25,
-    'Al Rayyan': 35,
-    'Al Wakrah': 40,
-    'default': 50,
-  };
-  
-  return shippingRates[address.city as keyof typeof shippingRates] || shippingRates.default;
+export function calculateShippingCost(subtotal: number, _address: ShippingAddress): number {
+  // Flat-rate shipping — free over R500, R80 otherwise.
+  // Online store delivery fees are configured in Ecommerce Settings and override this.
+  if (subtotal >= 500) return 0;
+  return 80;
 }
 
 export function validateOrderData(orderData: {

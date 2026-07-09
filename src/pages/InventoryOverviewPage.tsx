@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   ArrowLeft, Package, TrendingUp, TrendingDown, AlertTriangle,
-  RefreshCw, BarChart2,
+  RefreshCw, BarChart2, ChevronDown, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
@@ -41,6 +41,7 @@ export function InventoryOverviewPage({ onClose, onGoProducts, onGoStockMovement
   const { workspaceId } = useAuth();
   const [loading, setLoading] = useState(true);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -78,12 +79,21 @@ export function InventoryOverviewPage({ onClose, onGoProducts, onGoStockMovement
     });
     return Object.entries(map)
       .sort((a, b) => b[1].value - a[1].value)
-      .map(([name, d]) => ({
-        name: name.length > 16 ? name.slice(0, 15) + "…" : name,
+      .map(([fullName, d]) => ({
+        fullName,
+        name: fullName.length > 16 ? fullName.slice(0, 15) + "…" : fullName,
         Items: d.count,
         Value: Math.round(d.value),
       }));
   }, [active]);
+
+  const categoryItems = useMemo(() =>
+    selectedCategory
+      ? [...active.filter(i => (i.category || "Uncategorised") === selectedCategory)]
+          .sort((a, b) => (b.price * b.quantity) - (a.price * a.quantity))
+      : [],
+    [active, selectedCategory]
+  );
 
   // ── Category pie ─────────────────────────────────────────────────────
   const categoryPie = useMemo(() =>
@@ -188,21 +198,94 @@ export function InventoryOverviewPage({ onClose, onGoProducts, onGoStockMovement
         {/* ── Row 1: Category value bars + Pie ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 bg-card border border-border rounded-xl p-4">
-            <h3 className="text-sm font-semibold text-foreground mb-3">Stock Value by Category</h3>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-foreground">Stock Value by Category</h3>
+              <span className="text-[10px] text-muted-foreground">Click a bar to see items</span>
+            </div>
             {categoryData.length === 0 ? (
               <div className="flex items-center justify-center h-[230px] text-muted-foreground text-sm">No products yet</div>
             ) : (
               <ResponsiveContainer width="100%" height={230}>
-                <BarChart data={categoryData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                <BarChart
+                  data={categoryData}
+                  margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+                  onClick={(data) => {
+                    if (data?.activePayload?.[0]?.payload?.fullName) {
+                      const clicked = data.activePayload[0].payload.fullName;
+                      setSelectedCategory(prev => prev === clicked ? null : clicked);
+                    }
+                  }}
+                  style={{ cursor: "pointer" }}
+                >
                   <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
                   <XAxis dataKey="name" tick={{ fill: "#94a3b8", fontSize: 11 }} />
                   <YAxis tick={{ fill: "#94a3b8", fontSize: 11 }} tickFormatter={v => `R${(v/1000).toFixed(0)}k`} />
                   <Tooltip contentStyle={tooltipStyle} formatter={(v: any, name: string) => name === "Value" ? fmtR(v) : v} />
                   <Legend wrapperStyle={{ color: "#94a3b8", fontSize: 12 }} />
-                  <Bar dataKey="Value" fill="#f97316" radius={[4,4,0,0]} maxBarSize={40} />
-                  <Bar dataKey="Items" fill="#6366f1" radius={[4,4,0,0]} maxBarSize={40} />
+                  <Bar dataKey="Value" radius={[4,4,0,0]} maxBarSize={40}>
+                    {categoryData.map((entry, i) => (
+                      <Cell
+                        key={i}
+                        fill={entry.fullName === selectedCategory ? "#fb923c" : "#f97316"}
+                        opacity={selectedCategory && entry.fullName !== selectedCategory ? 0.45 : 1}
+                      />
+                    ))}
+                  </Bar>
+                  <Bar dataKey="Items" radius={[4,4,0,0]} maxBarSize={40}>
+                    {categoryData.map((entry, i) => (
+                      <Cell
+                        key={i}
+                        fill={entry.fullName === selectedCategory ? "#818cf8" : "#6366f1"}
+                        opacity={selectedCategory && entry.fullName !== selectedCategory ? 0.45 : 1}
+                      />
+                    ))}
+                  </Bar>
                 </BarChart>
               </ResponsiveContainer>
+            )}
+
+            {/* ── Category drill-down panel ── */}
+            {selectedCategory && (
+              <div className="mt-3 border border-border rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 bg-muted/40 border-b border-border">
+                  <div className="flex items-center gap-2">
+                    <ChevronDown className="h-3.5 w-3.5 text-orange-400" />
+                    <span className="text-xs font-semibold text-foreground">{selectedCategory}</span>
+                    <span className="text-[10px] text-muted-foreground">· {categoryItems.length} items</span>
+                  </div>
+                  <button onClick={() => setSelectedCategory(null)} className="p-0.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="overflow-x-auto max-h-56 overflow-y-auto">
+                  <table className="w-full text-xs text-foreground/80">
+                    <thead className="sticky top-0 bg-card border-b border-border">
+                      <tr className="text-muted-foreground">
+                        <th className="text-left py-1.5 px-3 font-semibold">Name</th>
+                        <th className="text-left py-1.5 px-2 font-semibold">SKU</th>
+                        <th className="text-right py-1.5 px-2 font-semibold">Price</th>
+                        <th className="text-right py-1.5 px-2 font-semibold">Qty</th>
+                        <th className="text-right py-1.5 px-3 font-semibold">Stock Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {categoryItems.map(item => (
+                        <tr key={item.id} className="border-b border-border/40 hover:bg-muted/30">
+                          <td className="py-1.5 px-3 font-medium text-foreground max-w-[160px] truncate">{item.name}</td>
+                          <td className="py-1.5 px-2 text-muted-foreground">{item.sku || "—"}</td>
+                          <td className="py-1.5 px-2 text-right">{fmtR(item.price || 0)}</td>
+                          <td className={`py-1.5 px-2 text-right font-bold ${item.quantity === 0 ? "text-red-400" : item.quantity <= (item.reorderLevel || 5) ? "text-amber-400" : "text-green-400"}`}>
+                            {item.quantity}
+                          </td>
+                          <td className="py-1.5 px-3 text-right font-semibold text-orange-400">
+                            {fmtR((item.price || 0) * (item.quantity || 0))}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
           </div>
           <div className="bg-card border border-border rounded-xl p-4">

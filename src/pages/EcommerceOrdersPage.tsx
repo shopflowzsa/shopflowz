@@ -165,13 +165,13 @@ const itemLocation = (item: EcommerceOrder["items"][number] | any) =>
   item?.drawer ||
   "";
 
-export function EcommerceOrdersPage({ onClose }: { onClose: () => void }) {
+export function EcommerceOrdersPage({ onClose, initialOrderNumber }: { onClose: () => void; initialOrderNumber?: string }) {
   const { workspaceId, user } = useAuth();
   const { toast } = useToast();
   const [orders, setOrders] = useState<EcommerceOrder[]>([]);
   const [registeredClients, setRegisteredClients] = useState<{ id: string; name: string; email: string; phone: string; registeredAt?: string }[]>([]);
   const [loading, setLoading] = useState(false);
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(typeof initialOrderNumber === "string" ? initialOrderNumber : "");
   const [activeTab, setActiveTab] = useState<TabId>("orders");
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [bookingFastwayId, setBookingFastwayId] = useState<string | null>(null);
@@ -219,6 +219,23 @@ export function EcommerceOrdersPage({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     loadOrders();
   }, [workspaceId]);
+
+  // When opened from a notification, auto-navigate to the matching order's tab and expand it
+  useEffect(() => {
+    if (!initialOrderNumber || typeof initialOrderNumber !== "string" || orders.length === 0) return;
+    const term = initialOrderNumber.toLowerCase();
+    const match = orders.find(o =>
+      (o.orderNumber || "").toLowerCase().includes(term) ||
+      o.id.toLowerCase().includes(term)
+    );
+    if (!match) return;
+    if (match.status === "cancelled") {
+      setActiveTab("cancelled");
+    } else {
+      setActiveTab(stageFor(match));
+    }
+    setExpandedOrder(match);
+  }, [orders, initialOrderNumber]);
 
   const sendReminder = async (order: EcommerceOrder) => {
     const email = order.customerInfo?.email;
@@ -328,7 +345,7 @@ export function EcommerceOrdersPage({ onClose }: { onClose: () => void }) {
   };
 
   const filteredOrders = useMemo(() => {
-    const term = search.trim().toLowerCase();
+    const term = (search || "").trim().toLowerCase();
     return orders.filter(order => {
       if (!term) return true;
       const haystack = [
@@ -391,7 +408,7 @@ export function EcommerceOrdersPage({ onClose }: { onClose: () => void }) {
         if (!existing.phone) existing.phone = rc.phone;
       }
     });
-    const term = search.trim().toLowerCase();
+    const term = (search || "").trim().toLowerCase();
     const all = [...map.values()].sort((a, b) => b.orderCount - a.orderCount);
     if (!term || activeTab !== "clients") return all;
     return all.filter(c => [c.name, c.email, c.phone].join(" ").toLowerCase().includes(term));

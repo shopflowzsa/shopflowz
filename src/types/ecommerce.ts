@@ -2,6 +2,27 @@
 // ECOMMERCE TYPE DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ─── WhatsApp Notification Templates ─────────────────────────────────────
+
+export type WhatsAppRecipient = 'store' | 'customer' | 'both';
+
+export interface WhatsAppNotificationTemplate {
+  enabled: boolean;
+  recipientType: WhatsAppRecipient;
+  storeNumber?: string;   // override storeWhatsApp for this event
+  message: string;        // supports {variable} placeholders
+}
+
+export interface WhatsAppNotifications {
+  newOrder?: WhatsAppNotificationTemplate;
+  newClient?: WhatsAppNotificationTemplate;
+  orderConfirmed?: WhatsAppNotificationTemplate;
+  orderPaid?: WhatsAppNotificationTemplate;
+  orderShipped?: WhatsAppNotificationTemplate;
+  orderReadyForPickup?: WhatsAppNotificationTemplate;
+  orderDelivered?: WhatsAppNotificationTemplate;
+}
+
 // ─── Product Management ──────────────────────────────────────────────────
 
 export interface ProductCategory {
@@ -388,10 +409,16 @@ export interface PublicProduct {
   }>;
   brand?: string;
   category: string;
+  subcategory?: string;
+  voltageRange?: string;
+  amperageRange?: string;
+  rdson?: string;
+  vbe?: string;
   tags: string[];
   quantityInStock?: number;
   averageRating?: number;
   reviewCount?: number;
+  status?: string;
 }
 
 export interface PublicCategory {
@@ -502,16 +529,23 @@ export interface EcommerceSettings {
   accentColor?: string;     // overrides the template's default accent
   heroHeight?: string;      // 'compact' | 'standard' | 'tall' | 'full'
   heroSlides?: Array<{
-    image: string;          // image URL (Cloudinary or any https URL)
+    image: string;                              // background image URL
+    imagePosition?: string;                     // CSS object-position: "top" | "center" | "bottom"
+    overlayImage?: string;                      // foreground model / product cutout
+    overlayPosition?: "left" | "right" | "center"; // where the overlay sits horizontally
+    overlaySize?: number;                       // overlay height as % of slide (30–100, default 90)
+    bgColor?: string;                           // solid colour fallback if no image
     heading?: string;
     subheading?: string;
-    ctaText?: string;       // button label (scrolls to products)
+    ctaText?: string;                           // button label (scrolls to products)
   }>;
 
   // Product Card Display Options
   showBrand: boolean;       // show supplier/brand on cards
   showQuantity: boolean;    // show qty available on cards
   showSku: boolean;         // show SKU/part number on cards
+  enableSimilarParts?: boolean;    // show "Find Similar Parts" button on product detail pages
+  similarPartsThreshold?: number;  // 0–100: minimum spec/tag overlap % to show a part as similar (default 30)
   
   // Tax Settings
   taxRate: number;
@@ -524,6 +558,9 @@ export interface EcommerceSettings {
   // Notification Settings
   sendOrderConfirmationEmail: boolean;
   sendOrderStatusUpdates: boolean;
+
+  // WhatsApp Notification Templates
+  whatsappNotifications?: WhatsAppNotifications;
 
   // Public-facing policy text (Markdown-ish — rendered on /shipping-policy and /returns-policy).
   // Required by Google Merchant Center store quality scoring.
@@ -581,6 +618,8 @@ export const DEFAULT_ECOMMERCE_SETTINGS: EcommerceSettings = {
   showBrand: false,
   showQuantity: true,
   showSku: true,
+  enableSimilarParts: false,
+  similarPartsThreshold: 30,
   taxRate: 15,
   taxIncluded: true,
   sendOrderConfirmationEmail: true,

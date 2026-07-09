@@ -383,6 +383,12 @@ export async function deleteMessageFromCache(
 
 // ── Send email ─────────────────────────────────────────────────────────────────
 
+export interface SendAttachment {
+  filename: string;
+  content: string; // base64-encoded
+  contentType?: string;
+}
+
 export interface SendParams {
   smtpConfig: { host: string; port: number; secure: boolean; user: string; pass: string };
   from: string;
@@ -391,6 +397,7 @@ export interface SendParams {
   text?: string;
   html?: string;
   cc?: string;
+  attachments?: SendAttachment[];
 }
 
 export async function sendEmail(params: SendParams): Promise<void> {
@@ -411,6 +418,7 @@ export async function sendEmail(params: SendParams): Promise<void> {
         subject: params.subject,
         text: params.text,
         html: params.html,
+        attachments: params.attachments?.length ? params.attachments : undefined,
       },
     }),
   });

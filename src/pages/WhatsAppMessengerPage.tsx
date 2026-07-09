@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ArrowLeft, Search, Send, MessageCircle, Check, CheckCheck,
-  Clock, AlertTriangle, Phone, X, Settings, Volume2, Bell, VolumeX,
+  Clock, AlertTriangle, Phone, X, Settings, Volume2, Bell, VolumeX, ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
 import { loadWhatsAppSettings } from "@/lib/whatsappService";
+import { WhatsAppContactTaskPanel } from "@/components/crm/WhatsAppContactTaskPanel";
 import { format, isToday, isYesterday, formatDistanceToNow, isPast } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
@@ -122,6 +123,7 @@ export function WhatsAppMessengerPage({ onClose, onUnreadCountChange, onSettings
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [showSettings, setShowSettings]   = useState(false);
   const [notifSettings, setNotifSettings] = useState<WaNotifSettings>(getWaNotifSettings);
+  const [showTaskPanel, setShowTaskPanel] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef       = useRef<HTMLTextAreaElement>(null);
@@ -619,7 +621,7 @@ export function WhatsAppMessengerPage({ onClose, onUnreadCountChange, onSettings
 
       {/* ══ RIGHT PANEL — Chat view ══════════════════════════════════════════════ */}
       <div className={cn(
-        "flex-1 flex flex-col min-w-0 bg-background",
+        "flex-1 flex min-w-0 bg-background",
         !selectedId && "hidden md:flex",
       )}>
 
@@ -640,7 +642,9 @@ export function WhatsAppMessengerPage({ onClose, onUnreadCountChange, onSettings
             </div>
           </div>
         ) : (
-          <>
+          <div className="flex flex-1 min-w-0">
+            {/* ── Chat column ──────────────────────────────────────────────────── */}
+            <div className="flex flex-col flex-1 min-w-0">
             {/* ── Chat header ──────────────────────────────────────────────────── */}
             <div className="flex items-center gap-3 px-4 py-3 bg-card border-b border-border shrink-0">
               <Button variant="ghost" size="icon"
@@ -675,6 +679,20 @@ export function WhatsAppMessengerPage({ onClose, onUnreadCountChange, onSettings
                   )}
                 </div>
               </div>
+
+              {/* Task panel toggle */}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowTaskPanel(s => !s)}
+                className={cn(
+                  "shrink-0 text-muted-foreground hover:text-foreground",
+                  showTaskPanel && "bg-green-500/10 text-green-500"
+                )}
+                title="Show linked tasks"
+              >
+                <ClipboardList className="h-4 w-4" />
+              </Button>
 
               {windowExpiresIn && (
                 <div className={cn(
@@ -877,7 +895,21 @@ export function WhatsAppMessengerPage({ onClose, onUnreadCountChange, onSettings
                 Press Enter to send · Shift+Enter for new line
               </p>
             </div>
-          </>
+            </div>{/* end chat column */}
+
+            {/* ── Linked task panel ──────────────────────────────────────────── */}
+            {showTaskPanel && workspaceId && (
+              <WhatsAppContactTaskPanel
+                workspaceId={workspaceId}
+                contactPhone={selectedConv.contact_phone}
+                contactName={selectedConv.contact_name}
+                onClose={() => setShowTaskPanel(false)}
+                onTaskClick={_taskId => {
+                  setShowTaskPanel(false);
+                }}
+              />
+            )}
+          </div>
         )}
       </div>
     </div>

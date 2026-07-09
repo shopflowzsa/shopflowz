@@ -110,6 +110,7 @@ export interface Task {
   technician?: string; // Assigned technician name
   isPaid?: boolean; // Whether the job has been paid for
   adminFlag?: { flagged: boolean; reason: string; flaggedBy: string; flaggedAt: string };
+  listEnteredAt?: string; // When the task was last moved into its current list
 }
 
 // Permission level for a specific user on a specific item.

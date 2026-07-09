@@ -344,6 +344,33 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── PROMO VIDEO ── */}
+      <section className="py-20 bg-white">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 text-center">
+          <Badge className="mb-4" style={{ background: "rgba(29,158,117,0.1)", color: BRAND_TEAL }}>
+            See it in action
+          </Badge>
+          <h2 className="text-3xl md:text-4xl font-extrabold mb-4">
+            Everything your business needs, in one place
+          </h2>
+          <p className="text-gray-500 text-lg mb-10 max-w-2xl mx-auto">
+            Watch how ShopFlowz brings together your store, CRM, invoicing, and more.
+          </p>
+          <div className="rounded-2xl overflow-hidden shadow-2xl border border-gray-100 bg-black">
+            <video
+              src="/promo.mp4"
+              controls
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="w-full"
+              style={{ display: "block", maxHeight: "540px", objectFit: "contain" }}
+            />
+          </div>
+        </div>
+      </section>
+
       {/* ── HOW IT WORKS ── */}
       <section className="py-24 bg-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">

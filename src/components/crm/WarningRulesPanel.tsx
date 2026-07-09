@@ -7,12 +7,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertTriangle, Bot, Save, Plus, Trash2, AlertCircle, X, Settings, ShieldAlert, Volume2 } from "lucide-react";
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
+import type { WorkspaceMember } from "@/types/auth";
+import { DEFAULT_STATUSES } from "@/types/crm";
 
 // ─────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────
 
-export type WarningRuleType = "missing_fields" | "block_new_in_stale_list" | "stale_task" | "list_age_lockout";
+export type WarningRuleType = "missing_fields" | "block_new_in_stale_list" | "stale_task" | "list_age_lockout" | "invoice_collected";
 
 export type StaleCheckTrigger = "on_load" | "on_open" | "daily_08";
 
@@ -30,6 +32,10 @@ export interface WarningRule {
   stale_check_trigger?: StaleCheckTrigger | null;
   stale_reasons?: string[];
   list_id?: string | null;
+  // ── Staff targeting — empty = applies to everyone ─────────────────────
+  apply_to_uids?: string[] | null;
+  // ── Statuses to skip — tasks with these statuses are ignored ──────────
+  exclude_statuses?: string[] | null;
 }
 
 export interface FolderOption {
@@ -41,6 +47,7 @@ export interface ListOption {
   id: string;
   name: string;
   parentId: string; // folder id this list lives under
+  customStatuses?: { id: string; label: string; color: string }[];
 }
 
 export interface WarningRulesPanelProps {
@@ -50,6 +57,7 @@ export interface WarningRulesPanelProps {
   folders?: FolderOption[];
   lists?: ListOption[];
   customFields?: { id: string; name: string; type?: string }[];
+  members?: WorkspaceMember[];
 }
 
 // ─────────────────────────────────────────────
@@ -85,6 +93,7 @@ export function WarningRulesPanel({
   folders = [],
   lists = [],
   customFields = [],
+  members = [],
 }: WarningRulesPanelProps) {
   const [rules, setRules] = useState<WarningRule[]>([]);
   const [editingRule, setEditingRule] = useState<Partial<WarningRule> | null>(null);
@@ -155,6 +164,7 @@ export function WarningRulesPanel({
     if (type === "missing_fields" && !editingRule.required_fields?.length) return;
     if ((type === "block_new_in_stale_list" || type === "stale_task" || type === "list_age_lockout") &&
         (!editingRule.stale_threshold_days || editingRule.stale_threshold_days <= 0)) return;
+    // invoice_collected needs only a folder (already checked above)
 
     setIsLoading(true);
     try {
@@ -170,6 +180,8 @@ export function WarningRulesPanel({
         stale_threshold_days: editingRule.stale_threshold_days ?? null,
         stale_check_trigger: editingRule.stale_check_trigger ?? null,
         stale_reasons: editingRule.stale_reasons ?? [],
+        apply_to_uids: editingRule.apply_to_uids ?? [],
+        exclude_statuses: editingRule.exclude_statuses ?? [],
       };
 
       if (editingRule.id) {
@@ -429,6 +441,13 @@ export function WarningRulesPanel({
                         {rule.rule_type === "list_age_lockout" && (
                           <>🔒 Lock staff out when a task is {rule.stale_threshold_days}+ days old in this list</>
                         )}
+                        {rule.rule_type === "invoice_collected" && (
+                          <>🧾 Warn when invoiced unit still in storage</>
+                        )}
+                        {(rule.rule_type === "stale_task" || rule.rule_type === "invoice_collected") &&
+                          rule.apply_to_uids && rule.apply_to_uids.length > 0 && (
+                            <> · {rule.apply_to_uids.map(uid => members.find(m => m.uid === uid)?.displayName || members.find(m => m.uid === uid)?.email || uid).join(", ")}</>
+                        )}
                       </p>
                     </div>
                     <div className="flex items-center gap-1 ml-2">
@@ -509,6 +528,9 @@ export function WarningRulesPanel({
                     <SelectItem value="list_age_lockout" className="text-foreground">
                       🔒 Lock staff out — task too old in list
                     </SelectItem>
+                    <SelectItem value="invoice_collected" className="text-foreground">
+                      🧾 Invoice collected — unit still in storage
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
@@ -518,6 +540,8 @@ export function WarningRulesPanel({
                     "Warns reception when a task has been sitting too long, and requires a reason."}
                   {editingRule.rule_type === "list_age_lockout" &&
                     "Locks the assigned staff member out of all other tasks until they clear the overdue task in this list. Works like the task limit lockout."}
+                  {editingRule.rule_type === "invoice_collected" &&
+                    "Warns staff when a task has an invoice but the job is still sitting in this folder/list — the customer was already invoiced and may have collected."}
                   {(!editingRule.rule_type || editingRule.rule_type === "missing_fields") &&
                     "Original rule: warns when a task is moved without required fields filled in."}
                 </p>
@@ -566,11 +590,12 @@ export function WarningRulesPanel({
                 )}
               </div>
 
-              {/* List Selection — only for stale-task rules. Leaving blank
+              {/* List Selection — only for stale-task and invoice-collected rules. Leaving blank
                   scopes the rule to the whole folder. */}
               {(editingRule.rule_type === "block_new_in_stale_list" ||
                 editingRule.rule_type === "stale_task" ||
-                editingRule.rule_type === "list_age_lockout") && (
+                editingRule.rule_type === "list_age_lockout" ||
+                editingRule.rule_type === "invoice_collected") && (
                 <div className="space-y-2">
                   <Label className="text-foreground/80">List (optional)</Label>
                   {(() => {
@@ -614,6 +639,101 @@ export function WarningRulesPanel({
                   </p>
                 </div>
               )}
+
+              {/* Staff targeting — who should see this warning (all rule types) */}
+              {members.length > 0 && (
+                <div className="space-y-2">
+                  <Label className="text-foreground/80">Send warning to</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {members.map((m) => {
+                      const selected = (editingRule.apply_to_uids ?? []).includes(m.uid);
+                      return (
+                        <button
+                          key={m.uid}
+                          type="button"
+                          onClick={() => {
+                            const current = editingRule.apply_to_uids ?? [];
+                            setEditingRule({
+                              ...editingRule,
+                              apply_to_uids: selected
+                                ? current.filter((uid) => uid !== m.uid)
+                                : [...current, m.uid],
+                            });
+                          }}
+                          className={`px-3 py-1 rounded-full text-sm border transition-colors ${
+                            selected
+                              ? "bg-purple-600 border-purple-500 text-white"
+                              : "bg-slate-700 border-border text-foreground/70 hover:border-purple-400"
+                          }`}
+                        >
+                          {m.displayName || m.email}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {(editingRule.apply_to_uids ?? []).length === 0
+                      ? "No staff selected — warning will show to everyone."
+                      : `Only the selected ${(editingRule.apply_to_uids ?? []).length} staff member(s) will see this warning.`}
+                  </p>
+                </div>
+              )}
+
+              {/* Status exclusions — which statuses to skip (all rule types) */}
+              {(() => {
+                let statusOptions = DEFAULT_STATUSES as { id: string; label: string; color: string }[];
+                if (editingRule.list_id) {
+                  const picked = lists.find(l => l.id === editingRule.list_id);
+                  if (picked?.customStatuses?.length) statusOptions = picked.customStatuses;
+                } else if (editingRule.folder_id) {
+                  const folderLists = lists.filter(l => l.parentId === editingRule.folder_id);
+                  const seen = new Set<string>();
+                  const merged: { id: string; label: string; color: string }[] = [];
+                  for (const l of folderLists) {
+                    for (const s of (l.customStatuses?.length ? l.customStatuses : DEFAULT_STATUSES)) {
+                      if (!seen.has(s.id)) { seen.add(s.id); merged.push(s); }
+                    }
+                  }
+                  if (merged.length) statusOptions = merged;
+                }
+                return (
+                  <div className="space-y-2">
+                    <Label className="text-foreground/80">Ignore jobs with these statuses</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {statusOptions.map((s) => {
+                        const excluded = (editingRule.exclude_statuses ?? []).includes(s.id);
+                        return (
+                          <button
+                            key={s.id}
+                            type="button"
+                            onClick={() => {
+                              const current = editingRule.exclude_statuses ?? [];
+                              setEditingRule({
+                                ...editingRule,
+                                exclude_statuses: excluded
+                                  ? current.filter((id) => id !== s.id)
+                                  : [...current, s.id],
+                              });
+                            }}
+                            className={`px-3 py-1 rounded-full text-sm border transition-colors ${
+                              excluded
+                                ? "bg-emerald-700 border-emerald-500 text-white"
+                                : "bg-slate-700 border-border text-foreground/70 hover:border-emerald-400"
+                            }`}
+                          >
+                            {excluded ? "✓ " : ""}{s.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {(editingRule.exclude_statuses ?? []).length === 0
+                        ? "No statuses excluded — rule checks all jobs regardless of status."
+                        : `Jobs marked as ${(editingRule.exclude_statuses ?? []).map(id => statusOptions.find(s => s.id === id)?.label || id).join(", ")} will be skipped.`}
+                    </p>
+                  </div>
+                );
+              })()}
 
               {/* Stale-task fields (only for stale rule types) */}
               {(editingRule.rule_type === "block_new_in_stale_list" ||
@@ -813,7 +933,9 @@ export function WarningRulesPanel({
                     !editingRule.folder_id ||
                     ((editingRule.rule_type || "missing_fields") === "missing_fields"
                       ? !editingRule.required_fields?.length
-                      : !editingRule.stale_threshold_days || editingRule.stale_threshold_days <= 0)
+                      : editingRule.rule_type === "invoice_collected"
+                        ? false
+                        : !editingRule.stale_threshold_days || editingRule.stale_threshold_days <= 0)
                   }
                   className="bg-purple-600 hover:bg-purple-700"
                 >

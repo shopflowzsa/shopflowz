@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { inventoryService, InventoryItem } from "@/lib/inventoryService";
+import { inventoryService, InventoryItem, VOLTAGE_RANGES, AMPERAGE_RANGES } from "@/lib/inventoryService";
 import { getThumbnailUrl, uploadImageToCloudinary } from "@/lib/cloudinaryService";
 import { cn } from "@/lib/utils";
 import { supabase, supabaseServiceRole } from "@/lib/supabase";
@@ -28,10 +28,16 @@ const TEXT_FIELDS: { key: keyof InventoryItem; label: string; width: string; typ
   { key: "name",         label: "Name",        width: "min-w-[200px]" },
   { key: "sku",          label: "SKU",         width: "min-w-[110px]" },
   { key: "category",     label: "Category",    width: "min-w-[150px]", type: "select", options: DEFAULT_CATEGORIES },
+  { key: "subcategory",  label: "Subcategory", width: "min-w-[150px]", type: "subcategory" },
+  { key: "voltageRange",  label: "Voltage",  width: "min-w-[110px]", type: "select", options: ["", ...VOLTAGE_RANGES] },
+  { key: "amperageRange", label: "Amperage", width: "min-w-[110px]", type: "select", options: ["", ...AMPERAGE_RANGES] },
+  { key: "rdson",         label: "RDSon",      width: "min-w-[110px]" },
+  { key: "vbe",           label: "Vbe",        width: "min-w-[110px]" },
   { key: "price",        label: "Price",       width: "min-w-[90px]",  type: "number" },
   { key: "costPrice",    label: "Cost",        width: "min-w-[90px]",  type: "number" },
   { key: "quantity",     label: "Qty",         width: "min-w-[80px]",  type: "number" },
   { key: "reorderLevel", label: "Reorder",     width: "min-w-[80px]",  type: "number" },
+  { key: "manufacturer", label: "Manufacturer", width: "min-w-[130px]" },
   { key: "supplier",     label: "Supplier",    width: "min-w-[130px]" },
   { key: "location",     label: "Location",    width: "min-w-[110px]" },
   { key: "description",  label: "Description", width: "min-w-[200px]" },
@@ -48,15 +54,58 @@ interface InventoryBulkEditorProps {
   onClose: () => void;
   /** When true the component fills its parent container (no fixed overlay, no header bar) */
   embedded?: boolean;
+  /** Only show items created/updated after this date */
+  filterSince?: Date;
+  /** Which timestamp to filter on: 'added' = createdAt, 'edited' = updatedAt */
+  filterMode?: "added" | "edited";
 }
 
-export function InventoryBulkEditor({ workspaceId, onClose, embedded }: InventoryBulkEditorProps) {
+function BulkCategoryPicker({ allCategories, subcategoryMap, onApply, count }: {
+  allCategories: string[];
+  subcategoryMap: Record<string, string[]>;
+  onApply: (field: "category" | "subcategory", value: string) => void;
+  count: number;
+}) {
+  const [cat, setCat] = useState("");
+  const subcats = cat ? (subcategoryMap[cat] || []) : [];
+
+  return (
+    <div className="flex items-center gap-1.5 shrink-0 border border-blue-300 rounded-md px-2 py-1 bg-blue-50 dark:bg-blue-950/40">
+      <span className="text-[10px] font-semibold text-blue-700 dark:text-blue-300 whitespace-nowrap">Set ({count}):</span>
+      <select
+        value={cat}
+        onChange={(e) => {
+          setCat(e.target.value);
+          if (e.target.value) onApply("category", e.target.value);
+        }}
+        className="h-6 text-xs rounded border border-blue-200 bg-white dark:bg-background dark:text-foreground px-1 cursor-pointer"
+      >
+        <option value="">Category…</option>
+        {allCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      {subcats.length > 0 && (
+        <select
+          defaultValue=""
+          key={cat}
+          onChange={(e) => { if (e.target.value) onApply("subcategory", e.target.value); }}
+          className="h-6 text-xs rounded border border-blue-200 bg-white dark:bg-background dark:text-foreground px-1 cursor-pointer"
+        >
+          <option value="">Subcategory…</option>
+          {subcats.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      )}
+    </div>
+  );
+}
+
+export function InventoryBulkEditor({ workspaceId, onClose, embedded, filterSince, filterMode = "added" }: InventoryBulkEditorProps) {
   const { toast } = useToast();
 
   // Data
   const [rows, setRows] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [savedCategories, setSavedCategories] = useState<string[]>(DEFAULT_CATEGORIES);
+  const [savedSubcategoryMap, setSavedSubcategoryMap] = useState<Record<string, string[]>>({});
 
   // Dirty tracking
   const [dirty, setDirty] = useState<Map<string, Partial<InventoryItem>>>(new Map());
@@ -97,6 +146,97 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
 
   // Row selection
   const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+
+  // ── Column resizing & visibility ─────────────────────────────────────────
+
+  function parseDefaultWidth(tw: string): number {
+    const m = tw.match(/\[(\d+)px\]/);
+    return m ? parseInt(m[1]) : 120;
+  }
+
+  const [colWidths, setColWidths] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(`batch_col_widths_${workspaceId}`);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return Object.fromEntries(TEXT_FIELDS.map((f) => [String(f.key), parseDefaultWidth(f.width)]));
+  });
+
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(`batch_hidden_cols_${workspaceId}`);
+      if (saved) return new Set<string>(JSON.parse(saved));
+    } catch {}
+    return new Set<string>();
+  });
+
+  const [showColPanel, setShowColPanel] = useState(false);
+  const colPanelRef = useRef<HTMLDivElement>(null);
+  const resizeDrag = useRef<{ key: string; startX: number; startW: number } | null>(null);
+  const colWidthsRef = useRef(colWidths);
+  useEffect(() => { colWidthsRef.current = colWidths; }, [colWidths]);
+
+  function startResize(e: React.MouseEvent, key: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    resizeDrag.current = { key, startX: e.clientX, startW: colWidths[key] ?? 120 };
+  }
+
+  function toggleColVisible(key: string) {
+    setHiddenCols((prev) => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      try { localStorage.setItem(`batch_hidden_cols_${workspaceId}`, JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  }
+
+  // Resize mouse tracking
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!resizeDrag.current) return;
+      const { key, startX, startW } = resizeDrag.current;
+      const newW = Math.max(50, startW + (e.clientX - startX));
+      setColWidths((prev) => ({ ...prev, [key]: newW }));
+    }
+    function onUp() {
+      if (!resizeDrag.current) return;
+      resizeDrag.current = null;
+      try { localStorage.setItem(`batch_col_widths_${workspaceId}`, JSON.stringify(colWidthsRef.current)); } catch {}
+    }
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, [workspaceId]);
+
+  // Close col panel on outside click
+  useEffect(() => {
+    if (!showColPanel) return;
+    function onDoc(e: MouseEvent) {
+      if (colPanelRef.current && !colPanelRef.current.contains(e.target as Node)) setShowColPanel(false);
+    }
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [showColPanel]);
+
+  const visibleFields = TEXT_FIELDS.filter((f) => !hiddenCols.has(String(f.key)));
+
+  // Bulk field apply
+  function bulkApply(field: "category" | "subcategory", value: string) {
+    if (!value || !selectedRows.size) return;
+    setRows((prev) => prev.map((r) => selectedRows.has(r.id) ? { ...r, [field]: value } : r));
+    updateDirty((prev) => {
+      const next = new Map(prev);
+      selectedRows.forEach((id) => {
+        const existing = next.get(id) ?? {};
+        next.set(id, { ...existing, [field]: value });
+      });
+      return next;
+    });
+  }
 
   // ── Description Search ────────────────────────────────────────────────────
   const [fetchingDescriptions, setFetchingDescriptions] = useState(false);
@@ -179,9 +319,9 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
       ]);
       setRows(items);
       const cats = (settingsRow.data?.data as any)?.categories;
-      if (Array.isArray(cats)) {
-        setSavedCategories(cats);
-      }
+      if (Array.isArray(cats)) setSavedCategories(cats);
+      const subs = (settingsRow.data?.data as any)?.subcategories;
+      if (subs && typeof subs === 'object') setSavedSubcategoryMap(subs);
     } catch (e: any) {
       toast({ title: "Failed to load inventory", description: e.message, variant: "destructive" });
     } finally {
@@ -214,9 +354,18 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
     const q = search.toLowerCase();
     let list = rows;
 
+    // Date filter: only items added/edited since filterSince
+    if (filterSince) {
+      const tsField = filterMode === "edited" ? "updatedAt" : "createdAt";
+      list = list.filter((r) => {
+        const ts = r[tsField];
+        return ts && new Date(ts as any) >= filterSince;
+      });
+    }
+
     if (q) {
       list = list.filter((r) =>
-        r.name.toLowerCase().includes(q) ||
+        (r.name || "").toLowerCase().includes(q) ||
         (r.sku || "").toLowerCase().includes(q) ||
         (r.category || "").toLowerCase().includes(q) ||
         (r.supplier || "").toLowerCase().includes(q)
@@ -227,11 +376,21 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
       list = list.filter((r) => r.status === filterStatus);
     }
 
-    list = [...list].sort((a, b) => {
-      const av = String(a[sortField] ?? "").toLowerCase();
-      const bv = String(b[sortField] ?? "").toLowerCase();
-      return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
-    });
+    // When date-filtering, default to newest-first on the relevant timestamp
+    if (filterSince) {
+      const tsField = filterMode === "edited" ? "updatedAt" : "createdAt";
+      list = [...list].sort((a, b) => {
+        const at = new Date((a[tsField] as any) ?? 0).getTime();
+        const bt = new Date((b[tsField] as any) ?? 0).getTime();
+        return bt - at;
+      });
+    } else {
+      list = [...list].sort((a, b) => {
+        const av = String(a[sortField] ?? "").toLowerCase();
+        const bv = String(b[sortField] ?? "").toLowerCase();
+        return sortDir === "asc" ? av.localeCompare(bv) : bv.localeCompare(av);
+      });
+    }
 
     return list;
   })();
@@ -559,7 +718,7 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
   const dirtyCount = dirty.size;
 
   function exportCsv() {
-    const headers = ["Name", "SKU", "Category", "Status", "Price", "Cost", "Qty", "Reorder", "Supplier", "Location", "Barcode", "Description"];
+    const headers = ["Name", "SKU", "Category", "Status", "Price", "Cost", "Qty", "Reorder", "Manufacturer", "Supplier", "Location", "Barcode", "Description"];
     const rowsToExport = selectedRows.size > 0
       ? filteredRows.filter(r => selectedRows.has(r.id))
       : filteredRows;
@@ -574,6 +733,7 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
         r.costPrice ?? 0,
         r.quantity ?? 0,
         r.reorderLevel ?? 0,
+        r.manufacturer ?? "",
         r.supplier ?? "",
         r.location ?? "",
         (r as any).barcode ?? "",
@@ -632,6 +792,14 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
                   ? `Searching… ${descProgress.done}/${descProgress.total}`
                   : `Find Descriptions (${selectedRows.size})`}
               </Button>
+            )}
+            {selectedRows.size > 0 && (
+              <BulkCategoryPicker
+                allCategories={allCategories}
+                subcategoryMap={savedSubcategoryMap}
+                onApply={bulkApply}
+                count={selectedRows.size}
+              />
             )}
             <Button
               size="sm"
@@ -706,6 +874,15 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
               : `Find Descriptions (${selectedRows.size})`}
           </Button>
         )}
+        {/* Bulk category/subcategory */}
+        {selectedRows.size > 0 && (
+          <BulkCategoryPicker
+            allCategories={allCategories}
+            subcategoryMap={savedSubcategoryMap}
+            onApply={bulkApply}
+            count={selectedRows.size}
+          />
+        )}
         <div className="relative flex-1 min-w-[200px] max-w-sm">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
@@ -736,6 +913,57 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
               {s === "all" ? "All" : s.charAt(0).toUpperCase() + s.slice(1)}
             </button>
           ))}
+        </div>
+
+        {/* Columns visibility toggle */}
+        <div className="relative" ref={colPanelRef}>
+          <button
+            onClick={() => setShowColPanel((v) => !v)}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded border text-xs font-medium transition-colors",
+              showColPanel
+                ? "bg-primary text-primary-foreground border-primary"
+                : "border-border text-muted-foreground hover:text-foreground hover:bg-accent"
+            )}
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Columns{hiddenCols.size > 0 ? ` (${hiddenCols.size} hidden)` : ""}
+          </button>
+          {showColPanel && (
+            <div className="absolute right-0 top-full mt-1 z-50 bg-popover border border-border rounded-lg shadow-xl p-3 min-w-[200px] max-h-[70vh] overflow-y-auto">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-xs font-semibold text-foreground">Show / Hide Columns</p>
+                {hiddenCols.size > 0 && (
+                  <button
+                    onClick={() => {
+                      setHiddenCols(new Set());
+                      try { localStorage.removeItem(`batch_hidden_cols_${workspaceId}`); } catch {}
+                    }}
+                    className="text-[10px] text-primary hover:underline"
+                  >
+                    Show all
+                  </button>
+                )}
+              </div>
+              <div className="space-y-1">
+                {TEXT_FIELDS.map((f) => {
+                  const key = String(f.key);
+                  const visible = !hiddenCols.has(key);
+                  return (
+                    <label key={key} className="flex items-center gap-2 px-1 py-0.5 rounded hover:bg-accent cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={visible}
+                        onChange={() => toggleColVisible(key)}
+                        className="rounded cursor-pointer"
+                      />
+                      <span className="text-xs text-foreground">{f.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="ml-auto flex items-center gap-2 text-xs text-muted-foreground">
@@ -784,18 +1012,25 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
                 {/* Status */}
                 <th className="text-left px-2 py-2 text-xs font-medium text-muted-foreground w-20 border-r">Status</th>
                 {/* Text fields */}
-                {TEXT_FIELDS.map((f) => (
+                {visibleFields.map((f) => (
                   <th
                     key={f.key}
-                    className={cn("text-left px-2 py-2 text-xs font-medium text-muted-foreground border-r cursor-pointer hover:bg-accent select-none", f.width)}
+                    style={{ width: colWidths[String(f.key)] ?? parseDefaultWidth(f.width), minWidth: 50 }}
+                    className="relative text-left px-2 py-2 text-xs font-medium text-muted-foreground border-r cursor-pointer hover:bg-accent select-none"
                     onClick={() => toggleSort(f.key)}
                   >
-                    <span className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 pr-2 truncate">
                       {f.label}
                       {sortField === f.key && (
-                        <ArrowUpDown className="h-3 w-3 text-primary" />
+                        <ArrowUpDown className="h-3 w-3 text-primary shrink-0" />
                       )}
                     </span>
+                    {/* Resize handle */}
+                    <div
+                      className="absolute right-0 top-0 h-full w-2 cursor-col-resize hover:bg-primary/40 z-10"
+                      onMouseDown={(e) => startResize(e, String(f.key))}
+                      onClick={(e) => e.stopPropagation()}
+                    />
                   </th>
                 ))}
                 {/* Delete */}
@@ -886,7 +1121,7 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
                       </td>
 
                       {/* ── Editable text cells ── */}
-                      {TEXT_FIELDS.map((f) => {
+                      {visibleFields.map((f) => {
                         const isActive = activeCell?.rowId === row.id && activeCell?.field === f.key;
                         const rawVal = row[f.key];
                         const displayVal = rawVal !== undefined && rawVal !== null && rawVal !== "" ? String(rawVal) : "";
@@ -894,15 +1129,15 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
                         return (
                           <td
                             key={f.key}
+                            style={{ width: colWidths[String(f.key)] ?? parseDefaultWidth(f.width), minWidth: 50 }}
                             className={cn(
                               "border-r px-0 py-0",
-                              f.width,
-                              isActive ? "bg-blue-50" : "hover:bg-accent/50 cursor-pointer"
+                              isActive ? "bg-blue-50 dark:bg-blue-950" : "hover:bg-accent/50 cursor-pointer"
                             )}
                             onClick={() => !isActive && startEdit(row.id, f.key, rawVal)}
                           >
                             {isActive ? (
-                              f.type === "select" && f.options ? (
+                              f.type === "subcategory" ? (
                                 <select
                                   autoFocus
                                   value={cellValue}
@@ -912,10 +1147,27 @@ export function InventoryBulkEditor({ workspaceId, onClose, embedded }: Inventor
                                   }}
                                   onBlur={() => commitEdit(row.id, f.key, cellValue)}
                                   onKeyDown={(e) => e.key === "Escape" && setActiveCell(null)}
-                                  className="w-full h-full px-2 py-1.5 bg-white border-none outline-none ring-1 ring-inset ring-primary text-sm cursor-pointer"
+                                  className="w-full h-full px-2 py-1.5 bg-background text-foreground border-none outline-none ring-1 ring-inset ring-primary text-sm cursor-pointer"
+                                >
+                                  <option value="">— none —</option>
+                                  {(savedSubcategoryMap[row.category || ""] || []).map((opt) => (
+                                    <option key={opt} value={opt}>{opt}</option>
+                                  ))}
+                                </select>
+                              ) : f.type === "select" && f.options ? (
+                                <select
+                                  autoFocus
+                                  value={cellValue}
+                                  onChange={(e) => {
+                                    setCellValue(e.target.value);
+                                    commitEdit(row.id, f.key, e.target.value);
+                                  }}
+                                  onBlur={() => commitEdit(row.id, f.key, cellValue)}
+                                  onKeyDown={(e) => e.key === "Escape" && setActiveCell(null)}
+                                  className="w-full h-full px-2 py-1.5 bg-background text-foreground border-none outline-none ring-1 ring-inset ring-primary text-sm cursor-pointer"
                                 >
                                   {(f.key === "category" ? allCategories : f.options).map((opt) => (
-                                    <option key={opt} value={opt}>{opt}</option>
+                                    <option key={opt} value={opt}>{opt === "" ? "— not set —" : opt}</option>
                                   ))}
                                 </select>
                               ) : (

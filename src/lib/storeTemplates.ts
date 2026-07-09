@@ -2,7 +2,7 @@
 // The cart / checkout / product-detail engine is shared — templates only change
 // the *visual layer*: header style, hero, product-card style, accent, layout.
 
-export type StoreTemplateKey = "classic" | "showcase" | "boutique" | "bold" | "catalog";
+export type StoreTemplateKey = "classic" | "showcase" | "boutique" | "bold" | "catalog" | "fashion" | "techstore";
 
 export interface StoreTemplate {
   key: StoreTemplateKey;
@@ -52,6 +52,20 @@ export const STORE_TEMPLATES: StoreTemplate[] = [
     description: "Dense and efficient — clean white, compact cards, search-first. Best for large ranges and parts shops.",
     hero: false, carousel: false, header: "light", card: "compact", font: "sans",
     accent: "#111827", gridCols: "grid-cols-2 sm:grid-cols-4 lg:grid-cols-6",
+  },
+  {
+    key: "fashion",
+    name: "Fashion",
+    description: "Editorial clothing store — tall portrait cards, hover-to-swap product photos, quick-add overlay. Perfect for clothing, accessories and lifestyle brands.",
+    hero: true, carousel: false, header: "light", card: "fashion", font: "serif",
+    accent: "#1a1a1a", gridCols: "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4",
+  },
+  {
+    key: "techstore",
+    name: "Tech Store",
+    description: "Electronics / components store — white header with search bar, blue category nav bar, full-width hero banner, spec-style Latest strip. Inspired by microrobotics.co.za.",
+    hero: true, carousel: true, header: "light", card: "compact", font: "sans",
+    accent: "#1d4ed8", gridCols: "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5",
   },
 ];
 

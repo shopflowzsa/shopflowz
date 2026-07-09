@@ -5,7 +5,7 @@ import { exportWorkspaceToZip, type ExportProgress, type ExportOptions, DEFAULT_
 
 import {
   ChevronDown, ChevronRight, Plus,
-  Folder as FolderIcon, FileText, Users, Lock, LogOut, MessageSquare, MessageCircle, DollarSign, Clock, BarChart3, BarChart2, Mail, Wrench, Printer, Package, Receipt, TrendingUp, FileSpreadsheet, Store, Building2, Settings, ExternalLink, CreditCard, Map, KeyRound, AlertCircle, Camera, TableProperties, Landmark, ArrowLeftRight, Activity, PieChart, FolderOpen, Bot, Sparkles, EyeOff, Sun, Moon, SunMoon, Bell, Zap, Upload, Download, CheckCircle, XCircle, ShieldAlert,
+  Folder as FolderIcon, FileText, Users, Lock, LogOut, MessageSquare, MessageCircle, DollarSign, Clock, BarChart3, BarChart2, Mail, Wrench, Printer, Package, Receipt, TrendingUp, FileSpreadsheet, Store, Building2, Settings, ExternalLink, CreditCard, Map, KeyRound, AlertCircle, Camera, TableProperties, Landmark, ArrowLeftRight, Activity, PieChart, FolderOpen, Bot, Sparkles, EyeOff, Sun, Moon, SunMoon, Bell, Zap, Upload, Download, CheckCircle, XCircle, ShieldAlert, BookOpen,
   ShoppingBag as ShoppingBagIcon,
 } from "lucide-react";
 import {
@@ -26,6 +26,27 @@ import { WarningRulesPanel } from "@/components/crm/WarningRulesPanel";
 import { UpgradePlanDialog } from "@/components/crm/UpgradePlanDialog";
 import { NotificationsBell } from "@/components/crm/NotificationsBell";
 import { EcommerceNotificationsBell } from "@/components/crm/EcommerceNotificationsBell";
+
+// Inject neon glow keyframes once
+if (typeof document !== "undefined" && !document.getElementById("neon-glow-style")) {
+  const s = document.createElement("style");
+  s.id = "neon-glow-style";
+  s.textContent = `
+    @keyframes neonViolet {
+      0%,100% { box-shadow: 0 0 4px 1px rgba(168,85,247,0.5), 0 0 10px 2px rgba(168,85,247,0.25); }
+      50%      { box-shadow: 0 0 10px 3px rgba(168,85,247,0.8), 0 0 20px 6px rgba(168,85,247,0.4); }
+    }
+    @keyframes neonAmber {
+      0%,100% { box-shadow: 0 0 4px 1px rgba(251,191,36,0.5), 0 0 10px 2px rgba(251,191,36,0.25); }
+      50%      { box-shadow: 0 0 10px 3px rgba(251,191,36,0.8), 0 0 20px 6px rgba(251,191,36,0.4); }
+    }
+    @keyframes neonCyan {
+      0%,100% { box-shadow: 0 0 4px 1px rgba(34,211,238,0.5), 0 0 10px 2px rgba(34,211,238,0.25); }
+      50%      { box-shadow: 0 0 10px 3px rgba(34,211,238,0.8), 0 0 20px 6px rgba(34,211,238,0.4); }
+    }
+  `;
+  document.head.appendChild(s);
+}
 
 interface CrmSidebarProps {
   workspace: WorkspaceState;
@@ -66,10 +87,13 @@ interface CrmSidebarProps {
   onOpenExpenseSlips: () => void;
   onOpenInventoryRegister: () => void;
   onOpenBanking: () => void;
+  onOpenBankingStatement: () => void;
+  onOpenChartOfAccounts: () => void;
   onOpenBusinessPlanning: () => void;
-  onOpenEcommerceOperations: () => void;
+  onOpenEcommerceOperations: (orderNumber?: string) => void;
   onOpenEcommerceAnalytics?: () => void;
   onOpenWalkInSale?: () => void;
+  onOpenJobCardSpares?: () => void;
   onCaptureExpenseSlip?: () => void;
   onOpenInvoiceScanner: () => void;
   onOpenPrinter: () => void;
@@ -111,7 +135,7 @@ export function CrmSidebar({
   onRenameSpace, onRenameFolder, onRenameList,
   onDeleteSpace, onDeleteFolder, onDeleteList,
   onOpenCustomFields, onTaskStatuses, onOpenForms, onOpenAccounts,
-  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount, onOpenWhatsAppDirect, whatsappDirectUnreadCount,
+  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBankingStatement, onOpenChartOfAccounts, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onOpenJobCardSpares, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount, onOpenWhatsAppDirect, whatsappDirectUnreadCount,
 }: CrmSidebarProps) {
   const { state } = useSidebar();
   const {
@@ -460,7 +484,8 @@ export function CrmSidebar({
               rel="noopener noreferrer"
               title="Open my live ecommerce store"
               className={cn(
-                "flex items-center justify-center gap-2 w-full rounded-md bg-green-600 hover:bg-green-700 text-white font-bold transition-colors shadow-md",
+                "flex items-center justify-center gap-2 w-full rounded-md text-white font-bold transition-all shadow-lg hover:shadow-green-500/30 hover:scale-[1.02]",
+                "bg-gradient-to-r from-green-500 via-emerald-500 to-teal-500 hover:from-green-400 hover:via-emerald-400 hover:to-teal-400",
                 collapsed ? "h-9 w-9 mx-auto" : "px-3 py-2 text-sm"
               )}
             >
@@ -555,40 +580,67 @@ export function CrmSidebar({
             )}
 
             {/* Staff Dashboard — quick-access home view */}
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                onClick={onOpenStaffDashboard}
-                className="group hover:bg-violet-900/40 rounded-md text-violet-300"
-                title="Staff Dashboard"
-              >
-                <div className="flex items-center gap-2 w-full">
-                  <BarChart2 className="h-4 w-4 shrink-0" />
-                  {!collapsed && (
-                    <span className="text-sm font-medium truncate flex-1">Staff Dashboard</span>
-                  )}
-                </div>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-
-            {/* Walk-in Sale — counter sale shortcut, mirrors the "Create a Task" pattern */}
-            {onOpenWalkInSale && (
+            <div className="rounded-md ring-1 ring-violet-500/60 my-0.5" style={{ animation: "neonViolet 2.4s ease-in-out infinite" }}>
               <SidebarMenuItem>
                 <SidebarMenuButton
-                  onClick={onOpenWalkInSale}
-                  className="group hover:bg-amber-900/40 rounded-md text-amber-300"
-                  title="Open the store in walk-in sale mode"
+                  onClick={onOpenStaffDashboard}
+                  className="group hover:bg-violet-900/40 rounded-md text-violet-200 font-semibold"
+                  title="Staff Dashboard"
                 >
                   <div className="flex items-center gap-2 w-full">
-                    <ShoppingBagIcon className="h-4 w-4 shrink-0" />
+                    <BarChart2 className="h-4 w-4 shrink-0 text-violet-400" />
                     {!collapsed && (
-                      <>
-                        <span className="text-sm font-medium truncate flex-1">Walk-in Sale</span>
-                        <span className="text-[10px] text-amber-400 truncate max-w-24">counter</span>
-                      </>
+                      <span className="text-sm font-semibold truncate flex-1">Staff Dashboard</span>
                     )}
                   </div>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+            </div>
+
+            {/* Walk-in Sale — counter sale shortcut */}
+            {onOpenWalkInSale && (
+              <div className="rounded-md ring-1 ring-amber-400/60 my-0.5" style={{ animation: "neonAmber 2s ease-in-out infinite" }}>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={onOpenWalkInSale}
+                    className="group hover:bg-amber-900/40 rounded-md text-amber-200 font-semibold"
+                    title="Open the store in walk-in sale mode"
+                  >
+                    <div className="flex items-center gap-2 w-full">
+                      <ShoppingBagIcon className="h-4 w-4 shrink-0 text-amber-400" />
+                      {!collapsed && (
+                        <>
+                          <span className="text-sm font-semibold truncate flex-1">Walk-in Sale</span>
+                          <span className="text-[10px] text-amber-400 truncate max-w-24">counter</span>
+                        </>
+                      )}
+                    </div>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </div>
+            )}
+
+            {/* Job Card Spares — book spare parts out of stock against a job number */}
+            {onOpenJobCardSpares && (
+              <div className="rounded-md ring-1 ring-cyan-400/60 my-0.5" style={{ animation: "neonCyan 2.8s ease-in-out infinite" }}>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    onClick={onOpenJobCardSpares}
+                    className="group hover:bg-cyan-900/40 rounded-md text-cyan-200 font-semibold"
+                    title="Book spare parts out of stock for a job card"
+                  >
+                    <div className="flex items-center gap-2 w-full">
+                      <Wrench className="h-4 w-4 shrink-0 text-cyan-400" />
+                      {!collapsed && (
+                        <>
+                          <span className="text-sm font-semibold truncate flex-1">Job Card Spares</span>
+                          <span className="text-[10px] text-cyan-400 truncate max-w-24">book out</span>
+                        </>
+                      )}
+                    </div>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </div>
             )}
 
             {/* Take Photo of Slip — quick capture shortcut, opens camera */}
@@ -596,11 +648,13 @@ export function CrmSidebar({
               <SidebarMenuItem>
                 <SidebarMenuButton
                   onClick={onCaptureExpenseSlip}
-                  className="group hover:bg-pink-900/40 rounded-md text-pink-300"
+                  className="group hover:bg-pink-900/30 rounded-md text-pink-200"
                   title="Snap a slip and auto-extract the data"
                 >
                   <div className="flex items-center gap-2 w-full">
-                    <Camera className="h-4 w-4 shrink-0" />
+                    <div className="h-6 w-6 rounded-md bg-pink-500/20 flex items-center justify-center shrink-0">
+                      <Camera className="h-3.5 w-3.5 text-pink-400" />
+                    </div>
                     {!collapsed && (
                       <>
                         <span className="text-sm font-medium truncate flex-1">Take Photo of Slip</span>
@@ -782,6 +836,8 @@ export function CrmSidebar({
                 {hasPermission("invoices") && <FlyoutItem icon={<Camera className="h-4 w-4 text-pink-400" />} label="Expense Slips" onClick={onOpenExpenseSlips} />}
                 {hasPermission("invoices") && <FlyoutItem icon={<TableProperties className="h-4 w-4 text-purple-300" />} label="Invoice Register" onClick={onOpenInvoiceRegister} />}
                 {hasPermission("invoices") && <FlyoutItem icon={<FileText className="h-4 w-4 text-teal-400" />} label="Statements" onClick={onOpenStatements} />}
+                {hasPermission("invoices") && <FlyoutItem icon={<Landmark className="h-4 w-4 text-emerald-400" />} label="Banking" onClick={onOpenBankingStatement} />}
+                {hasPermission("invoices") && <FlyoutItem icon={<BookOpen className="h-4 w-4 text-blue-400" />} label="Chart of Accounts" onClick={onOpenChartOfAccounts} />}
                 {hasPermission("settings") && <FlyoutItem icon={<Settings className="h-4 w-4 text-sidebar-foreground/60" />} label="Sales Settings" onClick={onOpenSalesSettings} />}
               </FlyoutGroup>
             </>
@@ -791,7 +847,7 @@ export function CrmSidebar({
           <SidebarMenuItem>
             <NotificationsBell
               collapsed={collapsed}
-              onOpenLink={(link) => { if (link === "ecommerce") onOpenEcommerceOperations(); }}
+              onOpenLink={(link) => { if (link?.startsWith("ecommerce")) { const orderNumber = link.includes(":") ? link.split(":")[1] : undefined; onOpenEcommerceOperations(orderNumber); } }}
             />
           </SidebarMenuItem>
 
@@ -800,14 +856,14 @@ export function CrmSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton
               onClick={onOpenEmail}
-              className="group hover:bg-blue-900/40 rounded-md text-blue-300"
+              className="group hover:bg-blue-900/30 rounded-md text-blue-200"
               title="Open your email inbox"
             >
               <div className="flex items-center gap-2 w-full">
-                <div className="relative shrink-0">
-                  <Mail className="h-4 w-4" />
+                <div className="relative shrink-0 h-6 w-6 rounded-md bg-blue-500/20 flex items-center justify-center">
+                  <Mail className="h-3.5 w-3.5 text-blue-400" />
                   {(emailUnreadCount ?? 0) > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3">
+                    <span className="absolute -top-1 -right-1 flex h-3 w-3">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500" />
                     </span>
@@ -833,14 +889,14 @@ export function CrmSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton
               onClick={onOpenWhatsAppMessenger}
-              className="group hover:bg-green-900/40 rounded-md text-green-400"
+              className="group hover:bg-green-900/30 rounded-md text-green-200"
               title="WhatsApp Messenger — team inbox"
             >
               <div className="flex items-center gap-2 w-full">
-                <div className="relative shrink-0">
-                  <MessageSquare className="h-4 w-4" />
+                <div className="relative shrink-0 h-6 w-6 rounded-md bg-green-500/20 flex items-center justify-center">
+                  <MessageSquare className="h-3.5 w-3.5 text-green-400" />
                   {(whatsappUnreadCount ?? 0) > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3">
+                    <span className="absolute -top-1 -right-1 flex h-3 w-3">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-3 w-3 bg-green-500" />
                     </span>
@@ -866,14 +922,14 @@ export function CrmSidebar({
           <SidebarMenuItem>
             <SidebarMenuButton
               onClick={onOpenWhatsAppDirect}
-              className="group hover:bg-emerald-900/40 rounded-md text-emerald-400"
+              className="group hover:bg-emerald-900/30 rounded-md text-emerald-200"
               title="WhatsApp 2 — second official WhatsApp Business number"
             >
               <div className="flex items-center gap-2 w-full">
-                <div className="relative shrink-0">
-                  <MessageCircle className="h-4 w-4" />
+                <div className="relative shrink-0 h-6 w-6 rounded-md bg-emerald-500/20 flex items-center justify-center">
+                  <MessageCircle className="h-3.5 w-3.5 text-emerald-400" />
                   {(whatsappDirectUnreadCount ?? 0) > 0 && (
-                    <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3">
+                    <span className="absolute -top-1 -right-1 flex h-3 w-3">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-600" />
                     </span>
@@ -904,28 +960,35 @@ export function CrmSidebar({
             collapsed={collapsed}
             dark
             dev={moduleDev("ecommerce")}
-            onHeaderClick={onOpenEcommerceOperations}
+            onHeaderClick={() => onOpenEcommerceOperations()}
           >
-            <FlyoutItem icon={<Users className="h-4 w-4 text-blue-400" />} label="Clients" onClick={onOpenEcommerceOperations} />
-            <FlyoutItem icon={<ShoppingBagIcon className="h-4 w-4 text-orange-400" />} label="Orders" onClick={onOpenEcommerceOperations} />
-            <FlyoutItem icon={<Package className="h-4 w-4 text-blue-400" />} label="Picking Slips" onClick={onOpenEcommerceOperations} />
-            <FlyoutItem icon={<Receipt className="h-4 w-4 text-green-400" />} label="Ready / Collected" onClick={onOpenEcommerceOperations} />
+            <FlyoutItem icon={<Users className="h-4 w-4 text-blue-400" />} label="Clients" onClick={() => onOpenEcommerceOperations()} />
+            <FlyoutItem icon={<ShoppingBagIcon className="h-4 w-4 text-orange-400" />} label="Orders" onClick={() => onOpenEcommerceOperations()} />
+            <FlyoutItem icon={<Package className="h-4 w-4 text-blue-400" />} label="Picking Slips" onClick={() => onOpenEcommerceOperations()} />
+            <FlyoutItem icon={<Receipt className="h-4 w-4 text-green-400" />} label="Ready / Collected" onClick={() => onOpenEcommerceOperations()} />
           </FlyoutGroup>
-          <EcommerceNotificationsBell collapsed={collapsed} onOpenLink={() => onOpenEcommerceOperations()} />
+          <EcommerceNotificationsBell collapsed={collapsed} onOpenLink={(link) => {
+            const orderNumber = link?.startsWith("ecommerce:") ? link.slice("ecommerce:".length) : undefined;
+            onOpenEcommerceOperations(orderNumber);
+          }} />
           {onOpenEcommerceAnalytics && (
             <button
               onClick={onOpenEcommerceAnalytics}
-              className={cn("group flex items-center gap-2 w-full rounded-md px-2 py-2 text-sidebar-foreground hover:bg-sidebar-accent transition-colors", collapsed && "justify-center")}
+              className={cn("group flex items-center gap-2 w-full rounded-md px-2 py-2 text-teal-200 hover:bg-teal-900/30 transition-colors", collapsed && "justify-center")}
             >
-              <BarChart2 className="h-4 w-4 shrink-0 text-teal-400" />
+              <div className="h-6 w-6 rounded-md bg-teal-500/20 flex items-center justify-center shrink-0">
+                <BarChart2 className="h-3.5 w-3.5 text-teal-400" />
+              </div>
               {!collapsed && <span className="text-sm font-medium">Store Analytics</span>}
             </button>
           )}
           <button
             onClick={onOpenEcommerceSettings}
-            className={cn("group flex items-center gap-2 w-full rounded-md px-2 py-2 text-sidebar-foreground hover:bg-sidebar-accent transition-colors", collapsed && "justify-center")}
+            className={cn("group flex items-center gap-2 w-full rounded-md px-2 py-2 text-orange-200 hover:bg-orange-900/30 transition-colors", collapsed && "justify-center")}
           >
-            <Settings className="h-4 w-4 shrink-0 text-gray-400" />
+            <div className="h-6 w-6 rounded-md bg-orange-500/20 flex items-center justify-center shrink-0">
+              <Settings className="h-3.5 w-3.5 text-orange-400" />
+            </div>
             {!collapsed && <span className="text-sm font-medium">Ecommerce Settings</span>}
           </button>
           </>
@@ -1588,8 +1651,9 @@ export function CrmSidebar({
         folders={workspace.folders.map(f => ({ id: f.id, name: f.name }))}
         lists={workspace.lists
           .filter(l => l.parentType === "folder")
-          .map(l => ({ id: l.id, name: l.name, parentId: l.parentId }))}
+          .map(l => ({ id: l.id, name: l.name, parentId: l.parentId, customStatuses: l.customStatuses }))}
         customFields={workspace.customFields}
+        members={members}
       />
     </Sidebar>
   );
@@ -1693,13 +1757,16 @@ function SectionHeader({
   children?: ReactNode;
   dev?: boolean;
 }) {
-  if (collapsed) return <div className="h-px bg-sidebar-foreground/20 my-1" />;
+  if (collapsed) return <div className="h-px bg-sidebar-foreground/10 my-2 mx-2" />;
   return (
-    <div className="flex items-center justify-between px-2 py-1.5 mt-2 rounded-sm bg-sidebar-accent">
-      <span className="flex items-center gap-1.5 text-[11px] font-bold text-sidebar-foreground uppercase tracking-widest">
-        {label}
-        {dev && <DevBadge />}
-      </span>
+    <div className="flex items-center justify-between px-2 pt-3 pb-1">
+      <div className="flex items-center gap-2">
+        <div className="h-3.5 w-[3px] rounded-full bg-gradient-to-b from-violet-400 via-blue-400 to-cyan-400 opacity-70" />
+        <span className="text-[10px] font-bold tracking-[0.18em] uppercase text-sidebar-foreground/40">
+          {label}
+          {dev && <DevBadge />}
+        </span>
+      </div>
       {children}
     </div>
   );
