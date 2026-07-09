@@ -23,12 +23,19 @@ CREATE INDEX IF NOT EXISTS idx_custom_ai_agents_workspace ON custom_ai_agents(wo
 
 ALTER TABLE custom_ai_agents ENABLE ROW LEVEL SECURITY;
 
--- Per-agent staff allow-list, only consulted when visibility_mode = 'selected'
+-- Per-agent staff allow-list, only consulted when visibility_mode = 'selected'.
+-- workspace_id is denormalized here (not just derivable via agent_id) so this
+-- table's own RLS policies never need to query custom_ai_agents — querying it
+-- would re-trigger custom_ai_agents' policies, which query this table, causing
+-- "infinite recursion detected in policy" (42P17).
 CREATE TABLE IF NOT EXISTS custom_ai_agent_access (
   agent_id UUID NOT NULL REFERENCES custom_ai_agents(id) ON DELETE CASCADE,
+  workspace_id TEXT NOT NULL,
   uid TEXT NOT NULL,
   PRIMARY KEY (agent_id, uid)
 );
+
+CREATE INDEX IF NOT EXISTS idx_custom_ai_agent_access_workspace ON custom_ai_agent_access(workspace_id);
 
 ALTER TABLE custom_ai_agent_access ENABLE ROW LEVEL SECURITY;
 
@@ -74,16 +81,14 @@ CREATE POLICY "Owners can manage agent access lists"
   TO authenticated
   USING (
     EXISTS (
-      SELECT 1 FROM custom_ai_agents a
-      JOIN workspace_members wm ON wm.workspace_id = a.workspace_id
-      WHERE a.id = custom_ai_agent_access.agent_id AND wm.uid = auth.uid()::TEXT AND wm.role = 'owner'
+      SELECT 1 FROM workspace_members wm
+      WHERE wm.workspace_id = custom_ai_agent_access.workspace_id AND wm.uid = auth.uid()::TEXT AND wm.role = 'owner'
     )
   )
   WITH CHECK (
     EXISTS (
-      SELECT 1 FROM custom_ai_agents a
-      JOIN workspace_members wm ON wm.workspace_id = a.workspace_id
-      WHERE a.id = custom_ai_agent_access.agent_id AND wm.uid = auth.uid()::TEXT AND wm.role = 'owner'
+      SELECT 1 FROM workspace_members wm
+      WHERE wm.workspace_id = custom_ai_agent_access.workspace_id AND wm.uid = auth.uid()::TEXT AND wm.role = 'owner'
     )
   );
 

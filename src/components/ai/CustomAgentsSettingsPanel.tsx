@@ -60,6 +60,7 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<EditState | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && workspaceId) loadAgents();
@@ -73,11 +74,13 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
 
   const startCreate = () => {
     setShowApiKey(false);
+    setSaveError(null);
     setEditing(blankEditState());
   };
 
   const startEdit = async (agent: CustomAgent) => {
     setShowApiKey(false);
+    setSaveError(null);
     const selectedUids = agent.visibility_mode === 'selected' ? await getAgentSelectedUids(agent.id) : [];
     setEditing({
       id: agent.id,
@@ -96,6 +99,7 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
   const handleSave = async () => {
     if (!editing || !editing.agent_name.trim()) return;
     setSaving(true);
+    setSaveError(null);
     const input = {
       agent_name: editing.agent_name.trim(),
       avatar_emoji: editing.avatar_emoji.trim() || '🤖',
@@ -106,11 +110,15 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
       visibility_mode: editing.visibility_mode,
       selectedUids: editing.selectedUids,
     };
-    const ok = editing.id ? await updateAgent(editing.id, input) : !!(await createAgent(workspaceId, input));
+    const result = editing.id
+      ? await updateAgent(editing.id, workspaceId, input)
+      : await createAgent(workspaceId, input).then((r) => ({ ok: !!r.agent, error: r.error }));
     setSaving(false);
-    if (ok) {
+    if (result.ok) {
       setEditing(null);
       await loadAgents();
+    } else {
+      setSaveError(result.error || 'Failed to save agent.');
     }
   };
 
@@ -360,6 +368,12 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
                 />
               </button>
             </div>
+
+            {saveError && (
+              <p className="text-xs text-red-500 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
+                {saveError}
+              </p>
+            )}
 
             <div className="flex gap-3 pt-2">
               <Button onClick={() => setEditing(null)} variant="outline" className="flex-1">

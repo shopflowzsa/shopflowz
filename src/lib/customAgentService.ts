@@ -90,7 +90,10 @@ export interface SaveAgentInput {
   position_index?: number;
 }
 
-export async function createAgent(workspaceId: string, input: SaveAgentInput): Promise<CustomAgent | null> {
+export async function createAgent(
+  workspaceId: string,
+  input: SaveAgentInput,
+): Promise<{ agent: CustomAgent | null; error?: string }> {
   const payload: Record<string, any> = {
     workspace_id: workspaceId,
     agent_name: input.agent_name,
@@ -112,17 +115,21 @@ export async function createAgent(workspaceId: string, input: SaveAgentInput): P
 
   if (error || !data) {
     console.error('Error creating custom agent:', error);
-    return null;
+    return { agent: null, error: error?.message || 'Unknown error creating agent' };
   }
 
   if (input.visibility_mode === 'selected') {
-    await replaceAgentAccess(data.id, input.selectedUids ?? []);
+    await replaceAgentAccess(data.id, workspaceId, input.selectedUids ?? []);
   }
 
-  return data as CustomAgent;
+  return { agent: data as CustomAgent };
 }
 
-export async function updateAgent(agentId: string, input: SaveAgentInput): Promise<boolean> {
+export async function updateAgent(
+  agentId: string,
+  workspaceId: string,
+  input: SaveAgentInput,
+): Promise<{ ok: boolean; error?: string }> {
   const payload: Record<string, any> = {
     agent_name: input.agent_name,
     avatar_emoji: input.avatar_emoji,
@@ -143,17 +150,17 @@ export async function updateAgent(agentId: string, input: SaveAgentInput): Promi
   const { error } = await supabase.from('custom_ai_agents').update(payload).eq('id', agentId);
   if (error) {
     console.error('Error updating custom agent:', error);
-    return false;
+    return { ok: false, error: error.message };
   }
 
   if (input.visibility_mode === 'selected') {
-    await replaceAgentAccess(agentId, input.selectedUids ?? []);
+    await replaceAgentAccess(agentId, workspaceId, input.selectedUids ?? []);
   }
 
-  return true;
+  return { ok: true };
 }
 
-async function replaceAgentAccess(agentId: string, uids: string[]): Promise<void> {
+async function replaceAgentAccess(agentId: string, workspaceId: string, uids: string[]): Promise<void> {
   const { error: delError } = await supabase.from('custom_ai_agent_access').delete().eq('agent_id', agentId);
   if (delError) {
     console.error('Error clearing custom agent access list:', delError);
@@ -163,7 +170,7 @@ async function replaceAgentAccess(agentId: string, uids: string[]): Promise<void
 
   const { error: insError } = await supabase
     .from('custom_ai_agent_access')
-    .insert(uids.map((uid) => ({ agent_id: agentId, uid })));
+    .insert(uids.map((uid) => ({ agent_id: agentId, workspace_id: workspaceId, uid })));
   if (insError) console.error('Error saving custom agent access list:', insError);
 }
 
