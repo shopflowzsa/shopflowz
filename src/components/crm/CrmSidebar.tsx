@@ -98,6 +98,7 @@ interface CrmSidebarProps {
   onOpenInvoiceScanner: () => void;
   onOpenPrinter: () => void;
   onOpenAIAssistant: () => void;
+  onOpenCustomAgentsSettings?: () => void;
   onOpenActivityMonitor: () => void;
   onOpenWhatsAppLogs: () => void;
   onOpenEmail: () => void;
@@ -135,7 +136,7 @@ export function CrmSidebar({
   onRenameSpace, onRenameFolder, onRenameList,
   onDeleteSpace, onDeleteFolder, onDeleteList,
   onOpenCustomFields, onTaskStatuses, onOpenForms, onOpenAccounts,
-  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBankingStatement, onOpenChartOfAccounts, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onOpenJobCardSpares, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount, onOpenWhatsAppDirect, whatsappDirectUnreadCount,
+  onSpaceOverview, onManagePermissions, onManageUsers, onManageWorkspaces, onOpenWhatsApp, onOpenPrinter, onOpenAIAssistant, onOpenCustomAgentsSettings, onOpenActivityMonitor, onOpenWhatsAppLogs, onOpenEmail, onOpenEmailSettings, emailUnreadCount, onOpenEcommerceSettings, onOpenEcommercePayments, onOpenStoreDesign, onOpenEcommerceBot, onOpenIkhokhaJobSettings, onOpenJobSettings, onOpenSupervisorPassword, onOpenTaskLimitSettings, onOpenFieldMapper, onShowTaskRecovery, onFolderOverview, onOpenActivityReports, onOpenStaffDashboard, onOpenDataSheets, isOwner, onChangePassword, onOpenInventory, onOpenStockMovements, onOpenQuotations, onOpenInvoicing, onOpenCustomers, onOpenSalesSettings, onOpenStatements, onOpenBusinessOverview, onOpenTechAssessment, onOpenOutstandingRepairs, onOpenTaskCreationList, onOpenSalesOverview, onOpenInventoryOverview, onOpenInvoiceRegister, onOpenExpenseSlips, onOpenInventoryRegister, onOpenBanking, onOpenBankingStatement, onOpenChartOfAccounts, onOpenBusinessPlanning, onOpenEcommerceOperations, onOpenEcommerceAnalytics, onOpenWalkInSale, onOpenJobCardSpares, onCaptureExpenseSlip, onDropTask, onOpenNotifications, onOpenSetupWizard, onOpenAuditLog, onOpenWhatsAppMessenger, whatsappUnreadCount, onOpenWhatsAppDirect, whatsappDirectUnreadCount,
 }: CrmSidebarProps) {
   const { state } = useSidebar();
   const {
@@ -1174,6 +1175,20 @@ export function CrmSidebar({
             onHeaderClick={onOpenTaskCreationList}
           >
             <FlyoutItem icon={<TableProperties className="h-4 w-4 text-indigo-400" />} label="Job Register" onClick={onOpenTaskCreationList} />
+          </FlyoutGroup>
+          )}
+
+          {/* ── Custom AI Agents ── */}
+          {(isSystemAdmin || isOwner) && onOpenCustomAgentsSettings && !moduleHidden("custom_ai_agents") && (
+          <FlyoutGroup
+            icon={<Sparkles className="h-4 w-4 shrink-0 text-violet-400" />}
+            label="Custom AI Agents"
+            collapsed={collapsed}
+            dark
+            dev={moduleDev("custom_ai_agents")}
+            onHeaderClick={onOpenCustomAgentsSettings}
+          >
+            <FlyoutItem icon={<Sparkles className="h-4 w-4 text-violet-400" />} label="Manage Agents" onClick={onOpenCustomAgentsSettings} />
           </FlyoutGroup>
           )}
 

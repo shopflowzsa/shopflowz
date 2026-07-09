@@ -47,6 +47,9 @@ import { checkBlockNewInStaleList, findStaleTasks, checkInvoicedTasksInStorage, 
 import { AIBotWarningDialog } from "@/components/crm/AIBotWarningDialog";
 import { SRAgentPanel } from "@/components/ai/SRAgentPanel";
 import { FloatingAIBubble } from "@/components/ai/FloatingAIBubble";
+import { CustomAgentsSettingsPanel } from "@/components/ai/CustomAgentsSettingsPanel";
+import { CustomAgentBubble } from "@/components/ai/CustomAgentBubble";
+import { listEnabledAgentsForBubbles, type CustomAgentBubbleInfo } from "@/lib/customAgentService";
 import { ActivityMonitor } from "@/components/crm/ActivityMonitor";
 import { TaskRecoveryPanel } from "@/components/crm/TaskRecoveryPanel";
 import { GlobalSearchModal } from "@/components/crm/GlobalSearchModal";
@@ -454,6 +457,12 @@ export default function Index() {
   const [showWhatsAppLogs, setShowWhatsAppLogs] = useState(false);
   const [showTaskRecovery, setShowTaskRecovery] = useState(false);
   const [showAIAssistant, setShowAIAssistant] = useState(false);
+  const [showCustomAgentsSettings, setShowCustomAgentsSettings] = useState(false);
+  const [customAgents, setCustomAgents] = useState<CustomAgentBubbleInfo[]>([]);
+  useEffect(() => {
+    if (!workspaceId) return;
+    listEnabledAgentsForBubbles(workspaceId).then(setCustomAgents);
+  }, [workspaceId]);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -3241,6 +3250,7 @@ export default function Index() {
           onOpenFieldMapper={() => setShowFieldMapper(true)}
           onShowTaskRecovery={() => setShowTaskRecovery(true)}
           onOpenAIAssistant={() => setShowAIAssistant(true)}
+          onOpenCustomAgentsSettings={() => setShowCustomAgentsSettings(true)}
           onChangePassword={() => setShowChangePassword(true)}
           onOpenNotifications={() => setShowNotifications(true)}
           isOwner={myRole === 'owner'}
@@ -3899,6 +3909,17 @@ export default function Index() {
         {!showAIAssistant && workspaceId && user?.uid && (
           <FloatingAIBubble workspaceId={workspaceId} userId={user.uid} open={false} />
         )}
+        <CustomAgentsSettingsPanel
+          open={showCustomAgentsSettings}
+          onOpenChange={(o) => {
+            setShowCustomAgentsSettings(o);
+            if (!o && workspaceId) listEnabledAgentsForBubbles(workspaceId).then(setCustomAgents);
+          }}
+          workspaceId={workspaceId || ""}
+        />
+        {workspaceId && user?.uid && customAgents.map((agent, i) => (
+          <CustomAgentBubble key={agent.id} agent={agent} workspaceId={workspaceId} userId={user.uid} index={i} />
+        ))}
         {cfTarget && (
           <CustomFieldsManager
             open={!!cfTarget}
