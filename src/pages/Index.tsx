@@ -46,9 +46,8 @@ import { StaleTaskBlockDialog, StaleTaskAcknowledgeDialog, InvoicedTaskWarningDi
 import { checkBlockNewInStaleList, findStaleTasks, checkInvoicedTasksInStorage, type StaleTaskHit, type InvoicedTaskHit } from "@/lib/staleTaskService";
 import { AIBotWarningDialog } from "@/components/crm/AIBotWarningDialog";
 import { SRAgentPanel } from "@/components/ai/SRAgentPanel";
-import { FloatingAIBubble } from "@/components/ai/FloatingAIBubble";
 import { CustomAgentsSettingsPanel } from "@/components/ai/CustomAgentsSettingsPanel";
-import { CustomAgentBubble } from "@/components/ai/CustomAgentBubble";
+import { AgentDock } from "@/components/ai/AgentDock";
 import { listEnabledAgentsForBubbles, type CustomAgentBubbleInfo } from "@/lib/customAgentService";
 import { ActivityMonitor } from "@/components/crm/ActivityMonitor";
 import { TaskRecoveryPanel } from "@/components/crm/TaskRecoveryPanel";
@@ -659,7 +658,7 @@ export default function Index() {
     setSelectedTask(null);
   };
 
-  // Bot navigation — FloatingAIBubble dispatches "shopflowz-navigate" to open sections
+  // Bot navigation — AgentDock's standard-agent chat dispatches "shopflowz-navigate" to open sections
   useEffect(() => {
     const handler = (e: Event) => {
       const target = (e as CustomEvent<{ target: string }>).detail?.target;
@@ -3906,9 +3905,6 @@ export default function Index() {
           workspaceId={workspaceId || ""}
           userId={user?.uid || ""}
         />
-        {!showAIAssistant && workspaceId && user?.uid && (
-          <FloatingAIBubble workspaceId={workspaceId} userId={user.uid} open={false} />
-        )}
         <CustomAgentsSettingsPanel
           open={showCustomAgentsSettings}
           onOpenChange={(o) => {
@@ -3917,9 +3913,9 @@ export default function Index() {
           }}
           workspaceId={workspaceId || ""}
         />
-        {workspaceId && user?.uid && customAgents.map((agent, i) => (
-          <CustomAgentBubble key={agent.id} agent={agent} workspaceId={workspaceId} userId={user.uid} index={i} />
-        ))}
+        {!showAIAssistant && workspaceId && user?.uid && (
+          <AgentDock workspaceId={workspaceId} customAgents={customAgents} />
+        )}
         {cfTarget && (
           <CustomFieldsManager
             open={!!cfTarget}
