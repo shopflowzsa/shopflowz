@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS custom_ai_agents (
   workspace_id TEXT NOT NULL,
   agent_name TEXT NOT NULL DEFAULT 'Custom Agent',
   avatar_emoji TEXT NOT NULL DEFAULT '🤖',
-  model TEXT NOT NULL DEFAULT 'claude-3-5-haiku-20241022',
+  model TEXT NOT NULL DEFAULT 'claude-haiku-4-5-20251001',
   system_prompt TEXT NOT NULL DEFAULT 'You are a helpful assistant for a workspace management app. Be concise and honest.',
   api_key TEXT NOT NULL DEFAULT '',
   has_api_key BOOLEAN NOT NULL DEFAULT false,

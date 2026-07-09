@@ -35,7 +35,7 @@ export interface ChatMessage {
 export const DEFAULT_CUSTOM_AGENT = {
   agent_name: 'Custom Agent',
   avatar_emoji: '🤖',
-  model: 'claude-3-5-haiku-20241022',
+  model: 'claude-haiku-4-5-20251001',
   system_prompt: 'You are a helpful assistant for a workspace management app. Be concise and honest.',
   is_enabled: true,
   visibility_mode: 'all' as AgentVisibility,

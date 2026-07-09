@@ -279,7 +279,7 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
               <Input
                 value={editing.model}
                 onChange={(e) => setEditing({ ...editing, model: e.target.value })}
-                placeholder="claude-3-5-haiku-20241022"
+                placeholder="claude-haiku-4-5-20251001"
                 className="bg-card border-border text-foreground"
               />
               <p className="text-xs text-muted-foreground">Any Claude model ID your API key has access to.</p>
