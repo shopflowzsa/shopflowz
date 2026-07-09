@@ -15,9 +15,12 @@ import {
   deleteAgent,
   toggleAgentEnabled,
   getAgentSelectedUids,
+  listAgentMemory,
+  deleteAgentMemoryEntry,
   DEFAULT_CUSTOM_AGENT,
   type CustomAgent,
   type AgentVisibility,
+  type AgentMemoryEntry,
 } from '@/lib/customAgentService';
 
 interface CustomAgentsSettingsPanelProps {
@@ -63,6 +66,8 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
   const [editing, setEditing] = useState<EditState | null>(null);
   const [showApiKey, setShowApiKey] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [memory, setMemory] = useState<AgentMemoryEntry[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(false);
 
   useEffect(() => {
     if (open && workspaceId) loadAgents();
@@ -77,13 +82,19 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
   const startCreate = () => {
     setShowApiKey(false);
     setSaveError(null);
+    setMemory([]);
     setEditing(blankEditState());
   };
 
   const startEdit = async (agent: CustomAgent) => {
     setShowApiKey(false);
     setSaveError(null);
+    setMemoryLoading(true);
     const selectedUids = agent.visibility_mode === 'selected' ? await getAgentSelectedUids(agent.id) : [];
+    listAgentMemory(agent.id).then((m) => {
+      setMemory(m);
+      setMemoryLoading(false);
+    });
     setEditing({
       id: agent.id,
       agent_name: agent.agent_name,
@@ -142,6 +153,11 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
       ...editing,
       selectedUids: has ? editing.selectedUids.filter((u) => u !== uid) : [...editing.selectedUids, uid],
     });
+  };
+
+  const handleDeleteMemory = async (entry: AgentMemoryEntry) => {
+    if (!window.confirm(`Delete saved memory "${entry.topic}"?`)) return;
+    if (await deleteAgentMemoryEntry(entry.id)) setMemory((prev) => prev.filter((m) => m.id !== entry.id));
   };
 
   return (
@@ -391,6 +407,39 @@ export function CustomAgentsSettingsPanel({ open, onOpenChange, workspaceId }: C
                 />
               </button>
             </div>
+
+            {editing.id && (
+              <div className="space-y-2 border-t border-border pt-4">
+                <Label>Saved memory</Label>
+                <p className="text-xs text-muted-foreground">
+                  What this agent has actually saved for itself via its save_memory tool — this is real, persisted
+                  data, not just something it said in a chat.
+                </p>
+                {memoryLoading ? (
+                  <p className="text-xs text-muted-foreground py-2">Loading…</p>
+                ) : memory.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-2">Nothing saved yet.</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                    {memory.map((entry) => (
+                      <div key={entry.id} className="flex items-start gap-2 p-2 rounded-md border border-border bg-card/50">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate">{entry.topic}</p>
+                          <p className="text-xs text-muted-foreground whitespace-pre-wrap break-words">{entry.content}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteMemory(entry)}
+                          className="p-1 rounded-md hover:bg-red-500/20 text-red-400 shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {saveError && (
               <p className="text-xs text-red-500 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">

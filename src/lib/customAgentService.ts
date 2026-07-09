@@ -209,6 +209,38 @@ export async function getAgentSelectedUids(agentId: string): Promise<string[]> {
   return (data ?? []).map((r) => r.uid as string);
 }
 
+export interface AgentMemoryEntry {
+  id: string;
+  topic: string;
+  content: string;
+  updated_at: string;
+}
+
+// What this agent has actually saved via its save_memory tool — surfaced so
+// owners can see real, persisted facts rather than trusting a chat reply
+// that only *claims* something was remembered.
+export async function listAgentMemory(agentId: string): Promise<AgentMemoryEntry[]> {
+  const { data, error } = await supabase
+    .from('custom_agent_memory')
+    .select('id, topic, content, updated_at')
+    .eq('agent_id', agentId)
+    .order('updated_at', { ascending: false });
+  if (error) {
+    console.error('Error loading agent memory:', error);
+    return [];
+  }
+  return (data ?? []) as AgentMemoryEntry[];
+}
+
+export async function deleteAgentMemoryEntry(id: string): Promise<boolean> {
+  const { error } = await supabase.from('custom_agent_memory').delete().eq('id', id);
+  if (error) {
+    console.error('Error deleting agent memory entry:', error);
+    return false;
+  }
+  return true;
+}
+
 // Send a message to a custom agent via the claude-agent-proxy Edge Function.
 // The browser never sees the Anthropic key — it stays server-side.
 export async function sendMessage(

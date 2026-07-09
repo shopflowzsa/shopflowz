@@ -122,6 +122,28 @@ async function handleList(
   return jsonResponse({ agents: visible });
 }
 
+const SAVE_MEMORY_TOOL = {
+  name: "save_memory",
+  description:
+    "Save a durable fact for future conversations — a product's price, a pricing formula, a policy someone told you, etc. Call this whenever you learn something worth remembering long-term, not just for this one reply. Reusing the same topic overwrites the previous value with the new one.",
+  input_schema: {
+    type: "object",
+    properties: {
+      topic: {
+        type: "string",
+        description: "Short label for this fact, e.g. 'Targa Street 12 pricing' or 'voice coil repair formula'.",
+      },
+      content: {
+        type: "string",
+        description: "The fact to remember, written so it makes sense on its own later without today's conversation for context.",
+      },
+    },
+    required: ["topic", "content"],
+  },
+};
+
+const MAX_TOOL_ITERATIONS = 4;
+
 async function handleChat(
   admin: ReturnType<typeof createClient>,
   workspaceId: string,
@@ -153,45 +175,109 @@ async function handleChat(
     if (!access) return jsonResponse({ error: "Not permitted to use this agent" }, 403);
   }
 
+  // Re-inject everything this agent has previously saved to memory so it
+  // actually persists across chats, instead of only "remembering" whatever
+  // happens to still be in the current conversation's visible history.
+  const { data: memoryRows } = await admin
+    .from("custom_agent_memory")
+    .select("topic, content")
+    .eq("agent_id", agent_id)
+    .order("updated_at", { ascending: false })
+    .limit(50);
+  const memoryBlock =
+    memoryRows && memoryRows.length > 0
+      ? "\n\nThings you've previously learned and saved for this workspace:\n" +
+        memoryRows.map((m) => `- ${m.topic}: ${m.content}`).join("\n")
+      : "";
+  const systemPrompt = (agent.system_prompt || "You are a helpful assistant.") + memoryBlock;
+
   // Basic (non-dynamic-filtering) web search — works across every Claude
   // model, since the agent's model is a free-text field the owner controls.
-  const tools = agent.web_search_enabled
-    ? [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }]
-    : undefined;
-
-  const resp = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": agent.api_key,
-      "anthropic-version": "2023-06-01",
-    },
-    body: JSON.stringify({
-      model: agent.model,
-      system: agent.system_prompt || "You are a helpful assistant.",
-      max_tokens: 1024,
-      messages,
-      ...(tools ? { tools } : {}),
-    }),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    return jsonResponse({ error: `Upstream ${resp.status}: ${text.slice(0, 500)}` }, 502);
+  const tools: Record<string, unknown>[] = [SAVE_MEMORY_TOOL];
+  if (agent.web_search_enabled) {
+    tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
   }
 
-  const data = await resp.json();
-  // With web search enabled, content interleaves text blocks with
-  // server_tool_use / web_search_tool_result blocks — concatenate every
-  // text block in order rather than assuming content[0] is the answer.
-  const answer = (data?.content ?? [])
-    .filter((block: { type: string }) => block.type === "text")
-    .map((block: { text: string }) => block.text)
-    .join("\n")
-    .trim();
-  if (!answer) return jsonResponse({ error: "Empty response from upstream" }, 502);
+  const conversation: unknown[] = [...messages];
 
-  return jsonResponse({ answer });
+  for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+    const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": agent.api_key,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: agent.model,
+        system: systemPrompt,
+        max_tokens: 1024,
+        messages: conversation,
+        tools,
+      }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      return jsonResponse({ error: `Upstream ${resp.status}: ${text.slice(0, 500)}` }, 502);
+    }
+
+    const data = await resp.json();
+    const content = (data?.content ?? []) as Array<Record<string, any>>;
+    const toolUses = content.filter((block) => block.type === "tool_use");
+
+    if (data.stop_reason !== "tool_use" || toolUses.length === 0) {
+      // With web search enabled, content interleaves text blocks with
+      // server_tool_use / web_search_tool_result blocks — concatenate every
+      // text block in order rather than assuming content[0] is the answer.
+      const answer = content
+        .filter((block) => block.type === "text")
+        .map((block) => block.text as string)
+        .join("\n")
+        .trim();
+      if (!answer) return jsonResponse({ error: "Empty response from upstream" }, 502);
+      return jsonResponse({ answer });
+    }
+
+    conversation.push({ role: "assistant", content });
+
+    const toolResults = [];
+    for (const toolUse of toolUses) {
+      if (toolUse.name === "save_memory") {
+        const { topic, content: memoryContent } = toolUse.input ?? {};
+        if (typeof topic === "string" && typeof memoryContent === "string" && topic.trim()) {
+          await admin.from("custom_agent_memory").upsert(
+            {
+              agent_id,
+              workspace_id: workspaceId,
+              topic: topic.trim(),
+              content: memoryContent,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "agent_id,topic" },
+          );
+          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: "Saved." });
+        } else {
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: toolUse.id,
+            content: "Missing topic or content.",
+            is_error: true,
+          });
+        }
+      } else {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: toolUse.id,
+          content: `Unknown tool: ${toolUse.name}`,
+          is_error: true,
+        });
+      }
+    }
+    conversation.push({ role: "user", content: toolResults });
+  }
+
+  return jsonResponse({ error: `Tool loop did not terminate within ${MAX_TOOL_ITERATIONS} iterations` }, 502);
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
