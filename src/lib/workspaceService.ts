@@ -1,6 +1,7 @@
 import { supabase, supabaseServiceRole, sbGetWorkspaceState, sbSetWorkspaceState, sbSubscribeWorkspaceState, sbDeleteTask, sbUpsertTask, sbGetTasks, sbInsertTaskWithJobNumber, sbSubscribeTasks } from "@/lib/supabase";
 import { WorkspaceState, FormDefinition, Task } from "@/types/crm";
 import { logNewTask } from "@/lib/jobLogService";
+import { logAgentAuditEvent, taskAuditSnapshot } from "@/lib/agentAuditLogService";
 
 type Unsubscribe = () => void;
 
@@ -414,6 +415,8 @@ export async function claimJobNumberAndAddTask(
 
   // Append-only backup — survives any workspace_state wipe
   await logNewTask(workspaceId, newTask);
+
+  logAgentAuditEvent(workspaceId, 'booking_created', 'task', newTask.id, newTask.title, taskAuditSnapshot(newTask));
 
   return { jobNumberStr, updatedState, preAssigned: !!preAssignedJobNumber };
 }

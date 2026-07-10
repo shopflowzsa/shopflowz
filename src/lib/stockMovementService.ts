@@ -5,6 +5,7 @@
 
 import { supabase, supabaseServiceRole } from './supabase';
 import { StockMovement, CreateStockMovementData, StockMovementSummary } from '@/types/stockMovement';
+import { logAgentAuditEvent } from './agentAuditLogService';
 
 /**
  * Create a stock movement and update inventory quantity
@@ -59,6 +60,28 @@ export async function createStockMovement(
   // Update inventory quantity
   const mergedInv = { ...inventoryItem, quantity: newQuantity, lastStockUpdate: now, updatedAt: now };
   await supabaseServiceRole.from('inventory').update({ data: mergedInv }).eq('id', movementData.productId);
+
+  if (movement.type === 'sale' || movement.type === 'adjustment-out') {
+    logAgentAuditEvent(
+      workspaceId,
+      movement.type === 'sale' ? 'stock_sold' : 'stock_booked_out',
+      'inventory_item',
+      movementData.productId,
+      movementData.productName,
+      {
+        sku: movementData.sku,
+        quantity: Math.abs(movementData.quantity),
+        previousQuantity,
+        newQuantity,
+        unitCost: movement.unitCost,
+        totalCost: movement.totalCost,
+        referenceType: movementData.referenceType,
+        referenceNumber: movementData.referenceNumber,
+        reason: movementData.reason,
+        createdBy: userName,
+      },
+    );
+  }
 
   return movement;
 }

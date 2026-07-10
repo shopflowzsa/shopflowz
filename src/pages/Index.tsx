@@ -96,6 +96,7 @@ import { loadWorkspaceState, saveWorkspaceState, subscribeWorkspaceState, subscr
 import { loadWhatsAppSettings, sendTaskWhatsApp, sendInvoiceWhatsApp } from "@/lib/whatsappService";
 import { createJobDepositPaylink } from "@/lib/ikhokhaJobService";
 import { logNewTask, reconcileRecentJobLog } from "@/lib/jobLogService";
+import { logAgentAuditEvent, taskAuditSnapshot } from "@/lib/agentAuditLogService";
 import { loadPrinterSettings, printBookingSlip } from "@/lib/printerService";
 import { logTaskCreated, logTaskUpdated, logTaskDeleted, logTasksBulkDeleted } from "@/lib/auditService";
 import { getQuotation } from "@/lib/quotationService";
@@ -1956,6 +1957,8 @@ export default function Index() {
         console.error("Failed to backup task to job_log:", error);
       }
 
+      logAgentAuditEvent(workspaceId, 'booking_created', 'task', newTask.id, newTask.title, taskAuditSnapshot(newTask));
+
       // Trigger WhatsApp notification if configured
       try {
         const waSettings = await loadWhatsAppSettings(workspaceId);
@@ -2053,6 +2056,11 @@ export default function Index() {
         trackTaskStatusChanged(updated.id, updated.title, previousTask.status, updated.status);
         if (updated.status === 'completed' || updated.status === 'done') {
           trackTaskCompleted(updated.id, updated.title);
+        }
+        const wasCollected = typeof previousTask.status === 'string' && previousTask.status.toLowerCase().includes('collected');
+        const isCollected = typeof updated.status === 'string' && updated.status.toLowerCase().includes('collected');
+        if (isCollected && !wasCollected && workspaceId) {
+          logAgentAuditEvent(workspaceId, 'status_collected', 'task', updated.id, updated.title, taskAuditSnapshot(updated as unknown as Record<string, unknown>));
         }
         // Snapshot current assignees when a task is first marked done — so the
         // staff dashboard still credits the right person even after unassignment
