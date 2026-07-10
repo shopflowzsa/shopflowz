@@ -16,6 +16,7 @@ export interface CustomAgent {
   is_enabled: boolean;
   visibility_mode: AgentVisibility;
   web_search_enabled: boolean;
+  app_data_access: boolean;
   position_index: number;
   created_at: string;
   updated_at: string;
@@ -41,10 +42,11 @@ export const DEFAULT_CUSTOM_AGENT = {
   is_enabled: true,
   visibility_mode: 'all' as AgentVisibility,
   web_search_enabled: false,
+  app_data_access: false,
 };
 
 const OWNER_COLUMNS =
-  'id, workspace_id, agent_name, avatar_emoji, model, system_prompt, is_enabled, has_api_key, visibility_mode, web_search_enabled, position_index, created_at, updated_at';
+  'id, workspace_id, agent_name, avatar_emoji, model, system_prompt, is_enabled, has_api_key, visibility_mode, web_search_enabled, app_data_access, position_index, created_at, updated_at';
 
 // Owner-facing list — never selects api_key.
 export async function listAgentsForOwner(workspaceId: string): Promise<CustomAgent[]> {
@@ -89,6 +91,7 @@ export interface SaveAgentInput {
   is_enabled: boolean;
   visibility_mode: AgentVisibility;
   web_search_enabled: boolean;
+  app_data_access: boolean;
   selectedUids?: string[]; // used when visibility_mode === 'selected'
   position_index?: number;
 }
@@ -106,6 +109,7 @@ export async function createAgent(
     is_enabled: input.is_enabled,
     visibility_mode: input.visibility_mode,
     web_search_enabled: input.web_search_enabled,
+    app_data_access: input.app_data_access,
     position_index: input.position_index ?? 0,
     api_key: input.api_key || '',
     has_api_key: !!input.api_key,
@@ -142,6 +146,7 @@ export async function updateAgent(
     is_enabled: input.is_enabled,
     visibility_mode: input.visibility_mode,
     web_search_enabled: input.web_search_enabled,
+    app_data_access: input.app_data_access,
     updated_at: new Date().toISOString(),
   };
   if (input.position_index !== undefined) payload.position_index = input.position_index;

@@ -142,6 +142,26 @@ const SAVE_MEMORY_TOOL = {
   },
 };
 
+const GET_AUDIT_LOG_TOOL = {
+  name: "get_audit_log",
+  description:
+    "Look up real business events that happened in this app: new bookings/jobs created, tasks whose status changed to 'collected', stock sold, and stock booked out against job cards. Each event has a timestamp and full details (custom field values, quantities, job numbers, etc). Use this to answer questions like 'what happened today', 'what's new this morning', or to build a report.",
+  input_schema: {
+    type: "object",
+    properties: {
+      event_types: {
+        type: "array",
+        items: { type: "string", enum: ["booking_created", "status_collected", "stock_sold", "stock_booked_out"] },
+        description: "Optional: filter to specific event types. Omit to get all types.",
+      },
+      date_from: { type: "string", description: "ISO 8601 datetime or date. Defaults to 24 hours ago." },
+      date_to: { type: "string", description: "ISO 8601 datetime or date. Defaults to now." },
+      limit: { type: "number", description: "Max rows (default 100, hard cap 300)." },
+    },
+    required: [],
+  },
+};
+
 const MAX_TOOL_ITERATIONS = 4;
 
 async function handleChat(
@@ -157,7 +177,7 @@ async function handleChat(
 
   const { data: agent } = await admin
     .from("custom_ai_agents")
-    .select("api_key, model, system_prompt, is_enabled, visibility_mode, web_search_enabled")
+    .select("api_key, model, system_prompt, is_enabled, visibility_mode, web_search_enabled, app_data_access")
     .eq("id", agent_id)
     .eq("workspace_id", workspaceId)
     .maybeSingle();
@@ -189,13 +209,20 @@ async function handleChat(
       ? "\n\nThings you've previously learned and saved for this workspace:\n" +
         memoryRows.map((m) => `- ${m.topic}: ${m.content}`).join("\n")
       : "";
-  const systemPrompt = (agent.system_prompt || "You are a helpful assistant.") + memoryBlock;
+  // The model's training data has a stale notion of "today" — without this,
+  // it guesses a wrong date when asked for "today"/"this week" and passes
+  // that wrong date to get_audit_log, silently returning zero rows.
+  const dateBlock = `\n\nToday's date and time is ${new Date().toISOString()}.`;
+  const systemPrompt = (agent.system_prompt || "You are a helpful assistant.") + dateBlock + memoryBlock;
 
   // Basic (non-dynamic-filtering) web search — works across every Claude
   // model, since the agent's model is a free-text field the owner controls.
   const tools: Record<string, unknown>[] = [SAVE_MEMORY_TOOL];
   if (agent.web_search_enabled) {
     tools.push({ type: "web_search_20250305", name: "web_search", max_uses: 5 });
+  }
+  if (agent.app_data_access) {
+    tools.push(GET_AUDIT_LOG_TOOL);
   }
 
   const conversation: unknown[] = [...messages];
@@ -264,6 +291,35 @@ async function handleChat(
             content: "Missing topic or content.",
             is_error: true,
           });
+        }
+      } else if (toolUse.name === "get_audit_log") {
+        const input = (toolUse.input ?? {}) as {
+          event_types?: string[];
+          date_from?: string;
+          date_to?: string;
+          limit?: number;
+        };
+        const dateFrom = input.date_from || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const dateTo = input.date_to || new Date().toISOString();
+        const limit = Math.min(input.limit ?? 100, 300);
+
+        let query = admin
+          .from("agent_audit_log")
+          .select("event_type, entity_type, entity_title, details, occurred_at")
+          .eq("workspace_id", workspaceId)
+          .gte("occurred_at", dateFrom)
+          .lte("occurred_at", dateTo)
+          .order("occurred_at", { ascending: false })
+          .limit(limit);
+        if (Array.isArray(input.event_types) && input.event_types.length > 0) {
+          query = query.in("event_type", input.event_types);
+        }
+
+        const { data: events, error: auditError } = await query;
+        if (auditError) {
+          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: `Error: ${auditError.message}`, is_error: true });
+        } else {
+          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify(events ?? []) });
         }
       } else {
         toolResults.push({
